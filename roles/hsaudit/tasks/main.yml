@@ -1,0 +1,333 @@
+---
+# HyperSec tasks file for Linux Audit deployment to collector
+# (c) 2022 HyperSec
+#
+# v2.5      2022-11-21      Force rsyslog-only audit delivery w/o audisp
+#                           audisp dependencies completely removed
+#                           Corrections for selinux edge cases on older distro releases
+#                           Late release RHEL stream support (audisp being deprecated)
+#                           Immutable auditd check for idempotent execution
+# v2.4      2022-10-26      Updates for RHEL6 and below and other EOLife distros
+# v2.3      2022-09-28      Old release distro support
+# v2.2      2022-09-26      TD fork
+# v2.1      2022-08-08      HyperSec core current version 
+
+- name: Run as root
+  block:
+  
+  - name: Ensure collector_address is set
+    fail: msg="Collector_address is not set"
+    when: not collector_address
+
+  - name: Log linux distro
+    debug:
+      msg: "Linux distribution is {{ ansible_distribution }}, major version is {{ ansible_distribution_major_version }}"
+
+  - name: Populate service facts
+    service_facts:
+ 
+  - name: Set auditd package default
+    set_fact:
+      auditd_package: audit
+
+  - name: Set auditd package = audit for Ubuntu/SLES/Debian
+    set_fact:
+      auditd_package: auditd 
+    when: ansible_distribution == 'Ubuntu' or ansible_distribution == 'SLES' or ansible_distribution == 'Debian'
+
+  - name: Install rsyslog, audit
+    package:
+      name: 
+        - rsyslog
+        - "{{ auditd_package }}"
+      state: latest
+    register: install_res
+    retries: 6
+    delay: 10
+    until: install_res is success    
+
+  - name: Install SELinux dependencies
+    block:
+
+    - name: Install policycoreutils
+      package:
+        name: 
+          - policycoreutils
+        state: latest
+      when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+
+    - name: Install policycoreutils-devel
+      package:
+        name: 
+          - policycoreutils-devel    
+        state: latest
+      failed_when: False    
+
+    - name: Install policycoreutils-python-utils
+      package:
+        name: 
+          - policycoreutils-python-utils    
+        state: latest
+      failed_when: False    
+
+    - name: Install policycoreutils-python
+      package:
+        name: 
+          - policycoreutils-python  
+        state: latest
+      failed_when: False    
+
+    - name: Install libselinux-python
+      package:
+        name: 
+          - libselinux-python   
+        state: latest
+      failed_when: False    
+
+    when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+
+  - name: Get rsyslogd major version
+    shell: "rsyslogd -v | head -1 | sed 's,[^0-9.]*,,g' | head -c 1"
+    register: rsyslogd_major_version_out
+
+  - name: Set rsyslogd major version fact
+    set_fact: 
+      rsyslogd_major_version: "{{ rsyslogd_major_version_out.stdout }}"
+
+  - name: Log rsyslogd version
+    debug:
+      msg: "RSyslog major version is {{ rsyslogd_major_version }}"
+
+  - name: Get daemon type 
+    shell: "ps -p 1 o comm="
+    register: daemon_type_out
+
+  - name: Set daemon type fact
+    set_fact: 
+      daemon_type: "{{ daemon_type_out.stdout }}"
+
+  - name: Log daemon type
+    debug:
+      msg: "Deamon type is {{ daemon_type }}"      
+
+  - name: Check for an existing immutable auditd configuration
+    find:
+      paths: /etc/audit/rules.d
+      contains: '-e 2'
+    register: found_immutable_auditd_out
+
+  - name: Set found immutable auditd fact
+    set_fact: 
+      found_immutable_auditd: "{{ found_immutable_auditd_out.matched != 0 }}"    
+
+  - name: Log found immutable auditd fact
+    debug:
+      msg: "Immutable audit configuration found: {{ found_immutable_auditd }}"      
+
+  - name: Set rsyslogd legacy flag on/off
+    set_fact: 
+      rsyslog_legacy: "{{ '-legacy' if rsyslogd_major_version < '7' else '' }}"
+
+  - name: Ensure /etc/rsyslog.d exists
+    file:
+      path: /etc/rsyslog.d
+      state: directory
+      owner: root
+      group: root
+      mode: '0644'
+
+  - name: Ensure /etc/rsyslog.d configurations are read irrespective of rsyslog version
+    lineinfile:
+      path: /etc/rsyslog.conf
+      insertafter: EOF
+      line: "$IncludeConfig /etc/rsyslog.d/*.conf"
+      state: present
+
+  - name: Build 99-hs-rsyslog.conf
+    template:
+      src: "99-hs-rsyslog{{ rsyslog_legacy }}.j2"
+      dest: /etc/rsyslog.d/99-hs-rsyslog.conf
+      owner: root
+      group: root
+      mode: '0644'
+
+  - name: Find distro specific deployed auditd.conf 
+    find:
+      paths: /etc
+      patterns: "auditd.conf"
+      recurse: True
+    register: auditd_path
+
+  - name: Get auditd major version
+    shell: "auditctl -v | head -1 | sed 's,[^0-9.]*,,g' | head -c 1"
+    register: auditd_major_version_out
+
+  - name: Cast auditd major version
+    set_fact: 
+      auditd_major_version: "{{ auditd_major_version_out.stdout }}"
+
+  - name: Get auditd major_minor version
+    shell: "auditctl -v | head -1 | sed 's,[^0-9.]*,,g' | head -c 3"
+    register: auditd_major_minor_version_out
+
+  - name: Cast auditd major_minor version
+    set_fact: 
+      auditd_major_minor_version: "{{ auditd_major_minor_version_out.stdout }}"
+
+  - name: Log auditd version
+    debug:
+      msg: "Auditd version is {{ auditd_major_minor_version }}"      
+
+  - name: Set auditd log_format
+    set_fact:
+      log_format_value: "{{ 'ENRICHED' if auditd_major_minor_version >= '2.8' else 'RAW' }}"
+
+  - name: Configure auditd.conf
+    lineinfile:
+      state: present
+      path: "{{ auditd_path.files[0].path }}"
+      regexp: '^\s*{{ item.search }}\s*=\s*.*'
+      line: '{{ item.replace }}'
+    with_items:
+      - { search: 'name_format', replace: 'name_format = hostname' }
+      - { search: 'priority_boost', replace: 'priority_boost = 8' }
+      - { search: 'log_group ', replace: 'log_group = root' }
+      - { search: 'log_format', replace: "log_format = {{ log_format_value }}" }
+      - { search: 'max_log_file_action', replace: "max_log_file_action = ROTATE" }
+      - { search: 'max_log_file', replace: "max_log_file = 100" }
+      - { search: 'num_logs', replace: "num_logs = 5" }
+
+  - name: Set default auditd rules path
+    set_fact: 
+      auditd_default_rules: "{{ '/etc/audit/audit.rules' if auditd_major_version == '1' else '/etc/audit/rules.d/audit.rules' }}"
+
+  - name: Set default auditd rules present
+    stat:
+      path: "{{ auditd_default_rules }}"
+    register: auditd_default_rules_present    
+
+  - name: Rename default audit.rules if present
+    copy: 
+      remote_src: True
+      src: "{{ auditd_default_rules }}"
+      dest: "{{ auditd_default_rules }}.default"
+    when: auditd_default_rules_present.stat.exists
+
+  - name: Set new auditd rules path
+    set_fact:
+      auditd_new_rules: "{{ '/etc/audit/audit.rules' if auditd_major_version == '1' else '/etc/audit/rules.d/hs-audit.rules' }}"
+
+  - name: Copy new auditd rules
+    copy:
+      src: hs-audit.rules
+      dest: "{{ auditd_new_rules }}"
+      owner: root
+      group: root
+      mode: '0644'
+
+  - name: Check for sysctl auditd 
+    stat:
+      path: /usr/lib/systemd/system/auditd.service
+    register: sysctl_auditd
+
+  - name: Permit audit stop temporarily for systemctl
+    lineinfile:
+      state: present
+      path: /usr/lib/systemd/system/auditd.service
+      regexp: '^\s*{{ item.search }}\s*=\s*.*'
+      line: '{{ item.replace }}'
+    with_items:
+      - { search: 'RefuseManualStop', replace: 'RefuseManualStop=no' }
+    when: sysctl_auditd.stat.exists
+
+  - name: SELinux allow rsyslog to send to TCP/12201 and 12205
+    community.general.seport:
+      ports: 
+        - 12201
+        - 12205
+      proto: tcp
+      setype: syslogd_port_t
+      state: present
+    when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+
+  - name: Create an SELinux build directory
+    ansible.builtin.file:
+      path: /tmp/rsyslog_audit
+      state: directory
+      mode: '0600'    
+      owner: root
+      group: root
+    when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+
+  - name: Copy SELinux rsyslog audit log policy file
+    copy:
+      src: rsyslog_read_audit_logs.te
+      dest: /tmp/rsyslog_audit/rsyslog_read_audit_logs.te
+      owner: root
+      group: root
+      mode: '0600'
+    when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+
+  - name: Make SELinux rsyslog audit log policy
+    shell: 'cd /tmp/rsyslog_audit && make -f /usr/share/selinux/devel/Makefile rsyslog_read_audit_logs.pp'
+    when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+
+  - name: Install SELinux rsyslog audit log policy
+    shell: 'semodule -i /tmp/rsyslog_audit/rsyslog_read_audit_logs.pp'
+    when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+
+  - name: Tidy up an SELinux build directory
+    ansible.builtin.file:
+      path: /tmp/rsyslog_audit
+      state: absent
+    when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+
+  - name: Daemon reload 
+    service:
+      daemon_reload: yes
+    when: daemon_type == 'systemd'  
+
+  - name: Enable rsyslog
+    service:
+      name: rsyslog
+      enabled: yes 
+    
+  - name: Enable auditd
+    service:
+      name: rsyslog
+      enabled: yes 
+  
+  - name: Stop auditd
+    service:
+      name: auditd
+      state: stopped
+    when: found_immutable_auditd != True
+
+  - name: Stop rsyslog
+    service:
+      name: rsyslog
+      state: stopped
+
+  - name: Remove audit stop temporarily for systemctl
+    lineinfile:
+      state: present
+      path: /usr/lib/systemd/system/auditd.service
+      regexp: '^\s*{{ item.search }}\s*=\s*.*'
+      line: '{{ item.replace }}'
+    with_items:
+      - { search: 'RefuseManualStop', replace: 'RefuseManualStop=yes' }
+    when: sysctl_auditd.stat.exists      
+
+  - name: Start auditd
+    service:
+      name: auditd
+      state: started
+    when: found_immutable_auditd != True
+
+  - name: Start rsyslog
+    service:
+      name: rsyslog
+      state: started    
+
+  become: yes
+  become_user: root

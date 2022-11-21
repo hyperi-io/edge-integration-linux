@@ -1,0 +1,6 @@
+all:
+  hosts:
+    centos5-audit-telstra.test.hypersec.io:
+  vars:
+    collector_address: syslog-rec-telstra.test.hypersec.io
+    ansible_python_interpreter: /usr/bin/python2.6

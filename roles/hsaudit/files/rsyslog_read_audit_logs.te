@@ -1,0 +1,7 @@
+policy_module(rsyslog_read_audit_logs, 1.0)
+
+gen_require(`
+type syslogd_t;
+')
+
+logging_read_audit_log(syslogd_t)

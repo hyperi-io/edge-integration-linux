@@ -1,0 +1,22 @@
+# HyperSec base system rsyslog configuration
+#
+# v2.4      2022-11-21      Merged ruleset
+# v2.3      2022-09-28      Old release distro RHEL 5/4 changes
+# v2.2      2022-09-26      Fork for multi distro and legacy/EOLife Linux endpoints
+# v2.1      2022-08-08      HyperSec core current version
+
+#
+# Log all events to the central collector
+#
+
+*.*       @@"{{ collector_address }}":12205
+
+$ModLoad imfile
+$InputFileName /var/log/audit/audit.log
+$InputFileTag auditd:
+$InputFileStateFile audit_log
+$InputFileSeverity info
+$InputRunFileMonitor
+
+if $programname == 'auditd' then @@"{{ collector_address }}":12201
+if $programname == 'auditd' then stop

@@ -1,0 +1,18 @@
+# HyperSec base system rsyslog configuration
+#
+# v2.4      2022-11-21      Merged ruleset
+# v2.3      2022-09-28      Old release distro RHEL 5/4 changes
+# v2.2      2022-09-26      Fork for multi distro and legacy/EOLife Linux endpoints
+# v2.1      2022-08-08      HyperSec core current version 
+
+#
+# Log all events to the central collector
+#
+
+*.* action(type="omfwd" target="{{ collector_address }}" port="12205" protocol="tcp" action.resumeRetryCount="100" queue.type="linkedList" queue.size="10000")
+
+module(load="imfile")
+input(type="imfile" File="/var/log/audit/audit.log" Tag="auditd" ruleset="remote_auditd" PersistStateInterval="200")
+ruleset(name="remote_auditd"){
+ action(type="omfwd" target="{{ collector_address }}" port="12201" protocol="tcp" action.resumeRetryCount="100" queue.type="linkedList" queue.size="10000")
+}

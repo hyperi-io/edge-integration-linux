@@ -1,0 +1,9 @@
+all:
+  hosts:
+    <ip addresss or DNS name of host here>:
+    <ip addresss or DNS name of host here>:
+    <ip addresss or DNS name of host here>:
+    <ip addresss or DNS name of host here>:
+    <ip addresss or DNS name of host here>:
+  vars:
+    collector_address: <ip addresss or DNS name of the local collector here>:
