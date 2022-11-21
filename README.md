@@ -52,5 +52,5 @@ https://semver.org/
 https://www.gitkraken.com/gitkon/semantic-versioning-git-tags  
 https://keepachangelog.com
 
-## Create deployment zip and tarball
-Execute ```./build-zips.sh```
+## Create deployment tarball
+Execute ```./build-tarball.sh```
