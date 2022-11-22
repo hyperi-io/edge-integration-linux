@@ -2,8 +2,10 @@
 # HyperSec tasks file for Linux Audit deployment to collector
 # (c) 2022 HyperSec
 #
+# v2.5.1    2022-11-22      Moved ansible module use for SELinix for rsyslog port to 
+#                           shell execution to reduce ansible/python/lib interdepencencies
+#                           for older/unsupported distro releases
 # v2.5      2022-11-21      Force rsyslog-only audit delivery w/o audisp
-#                           audisp dependencies completely removed
 #                           Corrections for selinux edge cases on older distro releases
 #                           Late release RHEL stream support (audisp being deprecated)
 #                           Immutable auditd check for idempotent execution
@@ -240,46 +242,46 @@
       - { search: 'RefuseManualStop', replace: 'RefuseManualStop=no' }
     when: sysctl_auditd.stat.exists
 
-  - name: SELinux allow rsyslog to send to TCP/12201 and 12205
-    community.general.seport:
-      ports: 
-        - 12201
-        - 12205
-      proto: tcp
-      setype: syslogd_port_t
-      state: present
-    when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+  - name: Configure SELinux 
+    block:
 
-  - name: Create an SELinux build directory
-    ansible.builtin.file:
-      path: /tmp/rsyslog_audit
-      state: directory
-      mode: '0600'    
-      owner: root
-      group: root
-    when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+    - name: SELinux allow rsyslog to send to TCP/12201
+      shell: 'semanage port -a -t syslogd_port_t -p tcp 12201'
+      register: semanage_result
+      failed_when: semanage_result.rc != 0 and "already defined" not in semanage_result.stderr
 
-  - name: Copy SELinux rsyslog audit log policy file
-    copy:
-      src: rsyslog_read_audit_logs.te
-      dest: /tmp/rsyslog_audit/rsyslog_read_audit_logs.te
-      owner: root
-      group: root
-      mode: '0600'
-    when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+    - name: SELinux allow rsyslog to send to TCP/12205
+      shell: 'semanage port -a -t syslogd_port_t -p tcp 12205'
+      failed_when: semanage_result.rc != 0 and "already defined" not in semanage_result.stderr
 
-  - name: Make SELinux rsyslog audit log policy
-    shell: 'cd /tmp/rsyslog_audit && make -f /usr/share/selinux/devel/Makefile rsyslog_read_audit_logs.pp'
-    when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+    - name: Create an SELinux build directory
+      ansible.builtin.file:
+        path: /tmp/rsyslog_audit
+        state: directory
+        mode: '0600'    
+        owner: root
+        group: root
+      when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
 
-  - name: Install SELinux rsyslog audit log policy
-    shell: 'semodule -i /tmp/rsyslog_audit/rsyslog_read_audit_logs.pp'
-    when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+    - name: Copy SELinux rsyslog audit log policy file
+      copy:
+        src: rsyslog_read_audit_logs.te
+        dest: /tmp/rsyslog_audit/rsyslog_read_audit_logs.te
+        owner: root
+        group: root
+        mode: '0600'
 
-  - name: Tidy up an SELinux build directory
-    ansible.builtin.file:
-      path: /tmp/rsyslog_audit
-      state: absent
+    - name: Make SELinux rsyslog audit log policy
+      shell: 'cd /tmp/rsyslog_audit && make -f /usr/share/selinux/devel/Makefile rsyslog_read_audit_logs.pp'
+
+    - name: Install SELinux rsyslog audit log policy
+      shell: 'semodule -i /tmp/rsyslog_audit/rsyslog_read_audit_logs.pp'
+
+    - name: Tidy up an SELinux build directory
+      ansible.builtin.file:
+        path: /tmp/rsyslog_audit
+        state: absent
+
     when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
 
   - name: Daemon reload 
