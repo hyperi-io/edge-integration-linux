@@ -51,8 +51,17 @@
 ## Remove any existing rules
 -D
 
-## Ignore-errors FIRST: unknown syscalls/options on older kernels (el6) are
-## skipped rather than aborting the whole ruleset load.
+## Ignore-errors FIRST: directives, syscalls and fields a given KERNEL does
+## not know (e.g. el6's 2.6.32) are SKIPPED at load, not fatal. Verified in
+## auditctl.c: fileopt() checks the ignore flag AFTER a line fails, so even a
+## getopt "unrecognized option" (--backlog_wait_time / --loginuid-immutable on
+## an auditctl too old to know them) is swallowed, not just kernel rejections.
+## This runtime skip is per-HOST correct - it reacts to the real kernel:
+## Ubuntu 16.04 (old auditd 2.4.5 but NEW kernel 4.x) KEEPS --backlog_wait_time,
+## while el6 (OLD kernel) drops it. Do NOT swap this for a static
+## auditd-version gate - it would wrongly strip the CPU fix on Ubuntu 16.04.
+## (auditd.conf is the OPPOSITE: an unknown KEYWORD or VALUE is fatal at daemon
+## start, so those values ARE auditd-version-gated in tasks/main.yml, not -i.)
 -i
 
 ## Kernel backlog buffer. Raise on busy el7+ hosts - with wait_time=0 the
