@@ -1,8 +1,17 @@
 ---
-# HyperSec tasks file for Linux Audit deployment to collector
-# (c) 2022 HyperSec
+# HyperI tasks file for Linux Audit deployment to collector
+# License:      BUSL-1.1
+# Copyright:    (c) 2026 HYPERI PTY LIMITED
 #
-# v2.5.1    2022-11-22      Moved ansible module use for SELinix for rsyslog port to 
+# v2.6      2026-07-16      Restored the multi-profile ruleset (low / medium /
+#                           high + internet use-case overlay), selected via the
+#                           hsaudit_level and hsaudit_use_case role variables.
+#                           Daemon CPU/concurrency tuning recovered from the
+#                           PaaS collector line: priority_boost 8 -> tiered
+#                           (2 low / 4 medium+high), added flush + freq. Pairs
+#                           with the --backlog_wait_time 0 kernel fix now in the
+#                           rules files. Kept the ENRICHED/RAW + rules.d gating.
+# v2.5.1    2022-11-22      Moved ansible module use for SELinix for rsyslog port to
 #                           shell execution to reduce ansible/python/lib interdepencencies
 #                           for older/unsupported distro releases
 # v2.5      2022-11-21      Force rsyslog-only audit delivery w/o audisp
@@ -12,7 +21,7 @@
 # v2.4      2022-10-26      Updates for RHEL6 and below and other EOLife distros
 # v2.3      2022-09-28      Old release distro support
 # v2.2      2022-09-26      TD fork
-# v2.1      2022-08-08      HyperSec core current version 
+# v2.1      2022-08-08      HyperI core current version
 
 - name: Run as root
   block:
@@ -24,6 +33,20 @@
   - name: Log linux distro
     debug:
       msg: "Linux distribution is {{ ansible_distribution }}, major version is {{ ansible_distribution_major_version }}"
+
+  - name: Set auditd profile level default (medium)
+    set_fact:
+      hsaudit_level: "medium"
+    when: hsaudit_level is undefined
+
+  - name: Fail on an unknown auditd profile level
+    fail:
+      msg: "hsaudit_level must be one of low|medium|high (got '{{ hsaudit_level }}')"
+    when: hsaudit_level not in ['low', 'medium', 'high']
+
+  - name: Log auditd profile selection
+    debug:
+      msg: "auditd profile level is {{ hsaudit_level }}, use-case overlay is {{ hsaudit_use_case | default('none') }}"
 
   - name: Populate service facts
     service_facts:
@@ -136,7 +159,7 @@
       state: directory
       owner: root
       group: root
-      mode: '0644'
+      mode: '0755'
 
   - name: Ensure /etc/rsyslog.d configurations are read irrespective of rsyslog version
     lineinfile:
@@ -184,6 +207,28 @@
     set_fact:
       log_format_value: "{{ 'ENRICHED' if auditd_major_minor_version >= '2.8' else 'RAW' }}"
 
+  # Daemon CPU/concurrency tuning (recovered from the PaaS collector line).
+  # priority_boost is auditd's scheduling-priority boost (default 4). The old
+  # value 8 made auditd preempt application threads and waste host CPU under
+  # load; drop it back to 4 (2 for the low profile). See --backlog_wait_time 0
+  # in the rules files for the paired kernel-side stall fix.
+  - name: Set auditd priority_boost (medium/high default)
+    set_fact:
+      priority_boost_value: "4"
+
+  - name: Lower auditd priority_boost for the low profile
+    set_fact:
+      priority_boost_value: "2"
+    when: hsaudit_level == 'low'
+
+  # flush=incremental_async is the modern default and the highest-performance
+  # durable mode (async fsync). incremental_async needs audit >= 2.6, so el6
+  # (audit 2.4.x) falls back to plain incremental. freq raises the records-per-
+  # flush count to cut fsync-induced iowait on the log write path.
+  - name: Set auditd flush mode by version (async where supported)
+    set_fact:
+      flush_value: "{{ 'incremental_async' if auditd_major_minor_version >= '2.6' else 'incremental' }}"
+
   - name: Configure auditd.conf
     lineinfile:
       state: present
@@ -192,12 +237,15 @@
       line: '{{ item.replace }}'
     with_items:
       - { search: 'name_format', replace: 'name_format = hostname' }
-      - { search: 'priority_boost', replace: 'priority_boost = 8' }
+      - { search: 'priority_boost', replace: "priority_boost = {{ priority_boost_value }}" }
       - { search: 'log_group ', replace: 'log_group = root' }
       - { search: 'log_format', replace: "log_format = {{ log_format_value }}" }
       - { search: 'max_log_file_action', replace: "max_log_file_action = ROTATE" }
       - { search: 'max_log_file', replace: "max_log_file = 100" }
       - { search: 'num_logs', replace: "num_logs = 5" }
+      - { search: 'flush', replace: "flush = {{ flush_value }}" }
+      - { search: 'freq ', replace: "freq = 200" }
+    when: auditd_path.files | length > 0
 
   - name: Set default auditd rules path
     set_fact: 
@@ -219,9 +267,18 @@
     set_fact:
       auditd_new_rules: "{{ '/etc/audit/audit.rules' if auditd_major_version == '1' else '/etc/audit/rules.d/hs-audit.rules' }}"
 
+  - name: Select the auditd rules source file for the profile level
+    set_fact:
+      auditd_rules_file: "hs-audit-{{ hsaudit_level }}.rules"
+
+  - name: Override the rules source file with a use-case overlay when set
+    set_fact:
+      auditd_rules_file: "hs-audit-{{ hsaudit_use_case }}.rules"
+    when: hsaudit_use_case is defined and hsaudit_use_case | length > 0
+
   - name: Copy new auditd rules
     copy:
-      src: hs-audit.rules
+      src: "{{ auditd_rules_file }}"
       dest: "{{ auditd_new_rules }}"
       owner: root
       group: root
@@ -252,13 +309,14 @@
 
     - name: SELinux allow rsyslog to send to TCP/12205
       shell: 'semanage port -a -t syslogd_port_t -p tcp 12205'
-      failed_when: semanage_result.rc != 0 and "already defined" not in semanage_result.stderr
+      register: semanage_result_12205
+      failed_when: semanage_result_12205.rc != 0 and "already defined" not in semanage_result_12205.stderr
 
     - name: Create an SELinux build directory
       ansible.builtin.file:
         path: /tmp/rsyslog_audit
         state: directory
-        mode: '0600'    
+        mode: '0755'
         owner: root
         group: root
       when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
@@ -296,8 +354,8 @@
     
   - name: Enable auditd
     service:
-      name: rsyslog
-      enabled: yes 
+      name: auditd
+      enabled: yes
   
   - name: Stop auditd
     service:

@@ -1,0 +1,168 @@
+# HyperI Auditd LOW profile - for Telstra / Digicel
+# License:      BUSL-1.1
+# Copyright:    (c) 2026 HYPERI PTY LIMITED
+#
+# Forked from Neo23x0 (Florian Roth) "Best Practice Auditd Configuration".
+# Detection keys carry MITRE ATT&CK technique IDs where mapped.
+#
+# Profile: LOW (selected via hsaudit_level=low). Leanest profile - the
+# high-signal file/exec watches plus the cheapest kernel TTPs, with the
+# high-volume syscall auditing (per-connection network, DAC perm-mod,
+# user file-deletion, IPC, io_uring/namespace breadth) REMOVED. For
+# resource- or bandwidth-constrained hosts and slow links. Step up to MEDIUM
+# where the host can carry it.
+#
+# Changelog (newest first):
+# v3.0  2026-07-16  Host-CPU fix + modernisation (see hs-audit-medium.rules).
+#                   --backlog_wait_time 0; -i first; dangling -F fix; trimmed
+#                   to the low-volume high-signal subset.
+# v2.7  2024-11-07  Tiered auditd migrated from PaaS (low profile).
+# v1.4  2021-01-11  Initial fork from Neo23x0.
+#
+# Assumes a 64-bit host (see the 32-bit ABI tripwire). Events are forwarded
+# off-box via rsyslog imfile reading /var/log/audit/audit.log, NOT audisp.
+
+# --- Service level configuration -------------------------------------------
+
+## Remove any existing rules
+-D
+
+## Ignore-errors FIRST: unknown syscalls/options on older kernels (el6) are
+## skipped rather than aborting the whole ruleset load.
+-i
+
+## Kernel backlog buffer. Raise on busy el7+ hosts - with wait_time=0 the
+## kernel drops on overflow, so more headroom here means fewer lost events.
+-b 8192
+
+## HOST-CPU FIX: never let the kernel block a syscall waiting for the audit
+## backlog to drain. 0 = drop on overflow instead of throttling the host.
+## Requires kernel >=3.14; el6 skips this line via -i.
+--backlog_wait_time 0
+
+## Make loginuid immutable (anti-tamper on auid). Kernel >=3.4; el6 skips.
+--loginuid-immutable
+
+## Failure mode: 1 = printk (0 silent, 2 panic).
+-f 1
+
+# --- Exclude high-frequency, low-risk records (efficiency) -----------------
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/usr/bin/grep   -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/usr/bin/sleep  -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/bin/ls         -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/bin/cat        -F perm=x -k T1059_exclude
+
+## Record-type noise (each msgtype needs its own line - cannot be combined)
+-a always,exclude -F msgtype=CWD -k exclude_cwd
+-a always,exclude -F msgtype=EOE -k exclude_eoe
+-a always,exclude -F msgtype=CRYPTO_KEY_USER -k exclude_crypto_user
+
+## Daemon self-noise
+-a never,user -F subj_type=crond_t -k T1053_cron_ignore
+-a never,exit -F subj_type=crond_t -k T1053_cron_ignore
+-a never,exit -F arch=b64 -S adjtimex -F auid=unset -F uid=chrony -F subj_type=chronyd_t -k T1099_chrony_ignore
+-a never,exit -F arch=b64 -S all -F exe=/usr/bin/vmtoolsd -k T1569_vmwaretools_ignore
+-a never,exit -F arch=b64 -F dir=/dev/shm -k T1135_sharedmem_ignore
+
+# --- Suspicious root execution context (efficient, euid=0 scoped) ----------
+-a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/tmp     -k T1059_root_tmp
+-a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/var/tmp -k T1059_root_vartmp
+-a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/dev/shm -k T1059_root_devshm
+-a always,exit -F arch=b64 -S execve -F euid=0 -F suid!=0 -k T1059_setuid_exec
+
+# --- Self auditing ---------------------------------------------------------
+-w /var/log/audit/ -p wra -k T1005_auditlog
+-w /etc/audit/     -p wa  -k auditconfig
+-w /etc/audisp/    -p wa  -k audispconfig
+-w /sbin/auditctl  -p x   -k audittools
+-w /sbin/auditd    -p x   -k audittools
+-w /usr/sbin/auditd -p x  -k audittools
+-w /usr/sbin/augenrules -p x -k audittools
+
+# --- 32-bit ABI tripwire (assumes a 64-bit host) ---------------------------
+-a always,exit -F arch=b32 -S all -F key=32bit-abi
+
+# --- Cheapest modern kernel TTPs (newer kernels; el6 skips via -i) ----------
+-a always,exit -F arch=b64 -S bpf -k T1055_ebpf
+-a always,exit -F arch=b64 -S memfd_create -k T1620_memfd
+
+# --- Kernel modules, time, cron, systemd persistence -----------------------
+-a always,exit -F perm=x -F auid!=-1 -F path=/sbin/insmod   -k T1547.006_mod
+-a always,exit -F perm=x -F auid!=-1 -F path=/sbin/modprobe -k T1547.006_mod
+-a always,exit -F perm=x -F auid!=-1 -F path=/sbin/rmmod    -k T1547.006_mod
+-a always,exit -F arch=b64 -S finit_module -S init_module -S delete_module -F auid!=-1 -k T1547.006_mod
+-w /etc/modprobe.conf -p wa -k T1547.006_mod
+-w /etc/modprobe.d    -p wa -k T1547.006_mod
+-a always,exit -F arch=b64 -S settimeofday -S clock_settime -k T1070.006_time
+-w /etc/localtime -p wa -k T1070.006_time
+-w /etc/crontab       -p wa -k T1053.003_cron
+-w /etc/cron.d/       -p wa -k T1053.003_cron
+-w /etc/cron.daily/   -p wa -k T1053.003_cron
+-w /etc/cron.hourly/  -p wa -k T1053.003_cron
+-w /var/spool/cron/crontabs/ -k T1053.003_cron
+-w /etc/inittab -p wa -k T1037_init
+-w /etc/init.d/ -p wa -k T1037_init
+-w /etc/systemd/system/     -k T1543.002_systemd
+-w /usr/lib/systemd/system/ -k T1543.002_systemd
+-w /bin/systemctl -p x -k T1543.002_systemd
+
+# --- Accounts, sudoers, credentials ----------------------------------------
+-w /etc/sudoers   -p wa -k T1078.003_sudoers
+-w /etc/sudoers.d -p wa -k T1078.003_sudoers
+-w /usr/bin/passwd -p x -k T1078.003_passwd
+-w /usr/sbin/useradd  -p x -k T1136_account
+-w /usr/sbin/userdel  -p x -k T1136_account
+-w /usr/sbin/usermod  -p x -k T1136_account
+-w /etc/group   -p wa -k T1087.001_localgroup
+-w /etc/passwd  -p wa -k T1087.001_localuser
+-w /etc/shadow  -p r -k T1087.001_shadow
+-w /etc/gshadow -k T1087.001_shadow
+-w /bin/su -p x -k T1548.003_su
+-w /usr/bin/sudo -p x -k T1548.003_sudo
+-w /usr/bin/pkexec -p x -k T1068_CVE_2021_4034
+
+# --- Code injection & persistence ------------------------------------------
+-a always,exit -F arch=b64 -S ptrace -F a0=0x4 -k T1055.008_ptrace
+-a always,exit -F arch=b64 -S ptrace -F a0=0x5 -k T1055.008_ptrace
+-w /etc/ld.so.preload -k T1574.006_ldpreload
+-w /etc/profile.d/ -k T1546.004_shellprofile
+-w /etc/profile    -k T1546.004_shellprofile
+-w /root/.bashrc       -p w -k T1546.004_rootbash
+-w /etc/ssh/sshd_config   -p wa -k T1098.004_sshd
+-w /etc/ssh/sshd_config.d -p wa -k T1098.004_sshd
+-w /root/.ssh -p wa -k T1098.004_root_ssh
+
+# --- Special files, mounts, hostname ---------------------------------------
+-a always,exit -F arch=b64 -S mknod -S mknodat -k T1546_specialfiles
+-a always,exit -F arch=b64 -S mount -S umount2 -F auid!=-1 -k T1078_mount
+-a always,exit -F arch=b64 -S sethostname -S setdomainname -k T1082_hostname
+-w /etc/hosts -p wa -k T1565_hosts
+
+# --- Indicator removal (root deletions only in LOW) ------------------------
+-w /usr/bin/shred -p x -k T1070.004_shred
+-w /usr/bin/wipe  -p x -k T1070.004_wipe
+-a always,exit -F arch=b64 -S rmdir -S unlink -S unlinkat -S rename -S renameat -F auid=0 -k T1070.004_filedel_root
+
+# --- Ingress tools / remote access -----------------------------------------
+-w /usr/bin/wget  -p x -k T1105_wget
+-w /usr/bin/curl  -p x -k T1105_curl
+-w /usr/bin/ssh   -p x -k T1021.004_ssh
+-w /bin/nc        -p x -k T1105_nc
+-w /usr/bin/ncat  -p x -k T1105_ncat
+-w /usr/bin/socat -p x -k T1105_socat
+
+# --- Stunnel (customer tunnel transport - Telstra / Digicel) ---------------
+-w /usr/sbin/stunnel -p x -k T1573.002_stunnel
+-w /usr/bin/stunnel  -p x -k T1573.002_stunnel
+
+# --- MAC (SELinux) and power state -----------------------------------------
+-w /etc/selinux/ -p wa -k T1562.001_selinux
+-w /sbin/shutdown -p x -k T1529_power
+-w /sbin/reboot   -p x -k T1529_power
+
+# --- Container runtime (exec only in LOW) ----------------------------------
+-w /usr/bin/docker -p x -k T1610_docker
+-w /var/run/docker.sock -p rwa -k T1610_docker_sock
+
+# --- Make the configuration immutable (MUST be last) -----------------------
+-e 2

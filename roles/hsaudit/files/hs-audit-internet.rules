@@ -1,0 +1,300 @@
+# HyperI Auditd INTERNET profile - for Telstra / Digicel
+# License:      BUSL-1.1
+# Copyright:    (c) 2026 HYPERI PTY LIMITED
+#
+# Forked from Neo23x0 (Florian Roth) "Best Practice Auditd Configuration".
+# Detection keys carry MITRE ATT&CK technique IDs where mapped.
+#
+# Profile: INTERNET (use-case overlay, selected via hsaudit_use_case=internet).
+# This is the MEDIUM profile with per-connection network logging REMOVED - for
+# internet-facing / edge hosts (web servers, reverse proxies, bastions) where a
+# NIPS + firewall already carry the connection telemetry and duplicating it in
+# auditd would only burn host CPU and forwarding bandwidth. Everything else
+# (persistence, priv-esc, credential access, module/kernel TTPs) is retained.
+#
+# Changelog (newest first):
+# v3.0  2026-07-16  Host-CPU fix + modernisation (see hs-audit-medium.rules).
+#                   --backlog_wait_time 0; -i first; new kernel TTPs; dangling
+#                   -F fix; per-connection connect4/connect6/socket block
+#                   dropped for this edge use-case.
+# v2.7  2024-11-07  Tiered auditd migrated from PaaS (connection logging off).
+# v1.4  2021-01-11  Initial fork from Neo23x0.
+#
+# Assumes a 64-bit host (see the 32-bit ABI tripwire). Events are forwarded
+# off-box via rsyslog imfile reading /var/log/audit/audit.log, NOT audisp.
+
+# --- Service level configuration -------------------------------------------
+
+## Remove any existing rules
+-D
+
+## Ignore-errors FIRST: unknown syscalls/options on older kernels (el6) are
+## skipped rather than aborting the whole ruleset load.
+-i
+
+## Kernel backlog buffer. Raise on busy el7+ hosts - with wait_time=0 the
+## kernel drops on overflow, so more headroom here means fewer lost events.
+-b 8192
+
+## HOST-CPU FIX: never let the kernel block a syscall waiting for the audit
+## backlog to drain. 0 = drop on overflow instead of throttling the host.
+## Requires kernel >=3.14; el6 skips this line via -i.
+--backlog_wait_time 0
+
+## Make loginuid immutable (anti-tamper on auid). Kernel >=3.4; el6 skips.
+--loginuid-immutable
+
+## Failure mode: 1 = printk (0 silent, 2 panic).
+-f 1
+
+# --- Exclude high-frequency, low-risk records (efficiency) -----------------
+## First-match-wins: keep the cheap excludes at the very top.
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/usr/bin/grep   -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/usr/bin/sleep  -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/bin/ping       -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/bin/ls         -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/bin/cat        -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/usr/bin/less   -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/usr/bin/more   -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/usr/bin/head   -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/usr/bin/tail   -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/usr/bin/which  -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/usr/bin/whoami -F perm=x -k T1059_exclude
+-a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/usr/bin/sort   -F perm=x -k T1059_exclude
+
+## Record-type noise (each msgtype needs its own line - cannot be combined)
+-a always,exclude -F msgtype=CWD -k exclude_cwd
+-a always,exclude -F msgtype=EOE -k exclude_eoe
+-a always,exclude -F msgtype=CRYPTO_KEY_USER -k exclude_crypto_user
+## SELinux AVC denials are LEFT LOGGED (they flag exploit attempts). Uncomment
+## on SELinux-enforcing hosts only if AVC volume becomes a problem:
+# -a always,exclude -F msgtype=AVC -k exclude_avc
+
+## Daemon self-noise
+-a never,user -F subj_type=crond_t -k T1053_cron_ignore
+-a never,exit -F subj_type=crond_t -k T1053_cron_ignore
+-a never,exit -F arch=b64 -S adjtimex -F auid=unset -F uid=chrony -F subj_type=chronyd_t -k T1099_chrony_ignore
+-a never,exit -F arch=b64 -S fork -F success=0 -F path=/usr/lib/vmware-tools -F subj_type=initrc_t -F exit=-2 -k T1569_vmwaretools_ignore
+-a never,exit -F arch=b64 -S fork -F success=0 -F path=/etc/vmware-tools -F subj_type=initrc_t -F exit=-2 -k T1569_vmwaretools_ignore
+-a never,exit -F arch=b64 -S all -F exe=/usr/bin/vmtoolsd -k T1569_vmwaretools_ignore
+-a never,exit -F arch=b64 -F dir=/dev/shm -k T1135_sharedmem_ignore
+-a never,exit -F arch=b64 -F dir=/var/lock/lvm -k exclude_locklvm
+## Kernel tracing pseudo-filesystems (filesystem filter: newer kernels; el6/el7 skip)
+-a never,filesystem -F fstype=tracefs -k exclude_tracefs
+-a never,filesystem -F fstype=debugfs -k exclude_debugfs
+
+# --- Suspicious root execution context (efficient, euid=0 scoped) ----------
+-a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/home          -k T1059_root_home
+-a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/tmp           -k T1059_root_tmp
+-a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/var/tmp       -k T1059_root_vartmp
+-a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/dev/shm       -k T1059_root_devshm
+-a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/usr/local/bin -k T1059_root_localbin
+-a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/opt           -k T1059_root_opt
+-a always,exit -F arch=b64 -S execve -F euid=0 -F sgid!=0 -k T1059_setgid_exec
+-a always,exit -F arch=b64 -S execve -F euid=0 -F suid!=0 -k T1059_setuid_exec
+
+# --- Self auditing ---------------------------------------------------------
+-w /var/log/audit/ -p wra -k T1005_auditlog
+-w /var/audit/     -p wra -k T1005_auditlog
+-w /etc/audit/     -p wa  -k auditconfig
+-w /etc/libaudit.conf -p wa -k auditconfig
+-w /etc/audisp/    -p wa  -k audispconfig
+-w /sbin/auditctl  -p x   -k audittools
+-w /sbin/auditd    -p x   -k audittools
+-w /usr/sbin/auditd -p x  -k audittools
+-w /usr/sbin/augenrules -p x -k audittools
+-a always,exit -F path=/usr/sbin/ausearch    -F perm=x -k T1005_auditlog
+-a always,exit -F path=/usr/sbin/aureport    -F perm=x -k T1005_auditlog
+-a always,exit -F path=/usr/sbin/aulast      -F perm=x -k T1005_auditlog
+-a always,exit -F path=/usr/sbin/aulastlogin -F perm=x -k T1005_auditlog
+-a always,exit -F path=/usr/sbin/auvirt      -F perm=x -k T1005_auditlog
+
+# --- 32-bit ABI tripwire (assumes a 64-bit host) ---------------------------
+-a always,exit -F arch=b32 -S all -F key=32bit-abi
+
+# --- Modern kernel-level TTPs (newer kernels; el6 skips via -i) -------------
+-a always,exit -F arch=b64 -S bpf -k T1055_ebpf
+-a always,exit -F arch=b64 -S setns -S unshare -k T1611_namespace
+-a always,exit -F arch=b64 -S io_uring_setup -k T1562_io_uring
+-a always,exit -F arch=b64 -S memfd_create -k T1620_memfd
+
+# --- Kernel modules, time, cron, at, systemd persistence -------------------
+-w /etc/sysctl.conf -p wa -k T1547_sysctl
+-w /etc/sysctl.d    -p wa -k T1547_sysctl
+-a always,exit -F perm=x -F auid!=-1 -F path=/sbin/insmod   -k T1547.006_mod
+-a always,exit -F perm=x -F auid!=-1 -F path=/sbin/modprobe -k T1547.006_mod
+-a always,exit -F perm=x -F auid!=-1 -F path=/sbin/rmmod    -k T1547.006_mod
+-a always,exit -F arch=b64 -S finit_module -S init_module -S delete_module -F auid!=-1 -k T1547.006_mod
+-a always,exit -F arch=b64 -S kexec_load -k T1014_kexec
+-w /etc/modprobe.conf -p wa -k T1547.006_mod
+-w /etc/modprobe.d    -p wa -k T1547.006_mod
+-a always,exit -F arch=b64 -S adjtimex -S settimeofday -S clock_settime -k T1070.006_time
+-w /etc/localtime -p wa -k T1070.006_time
+-a always,exit -F arch=b64 -S utimes -S utimensat -k T1070.006_time
+-w /etc/cron.allow -p wa -k T1053.003_cron
+-w /etc/cron.deny  -p wa -k T1053.003_cron
+-w /etc/cron.d/       -p wa -k T1053.003_cron
+-w /etc/cron.daily/   -p wa -k T1053.003_cron
+-w /etc/cron.hourly/  -p wa -k T1053.003_cron
+-w /etc/cron.monthly/ -p wa -k T1053.003_cron
+-w /etc/cron.weekly/  -p wa -k T1053.003_cron
+-w /etc/crontab       -p wa -k T1053.003_cron
+-w /var/spool/cron/crontabs/ -k T1053.003_cron
+-w /etc/inittab -p wa -k T1037_init
+-w /etc/init.d/ -p wa -k T1037_init
+-w /etc/init/   -p wa -k T1037_init
+-w /sbin/init   -k T1037_init
+-w /etc/at.allow -p wa -k T1053.002_at
+-w /etc/at.deny  -p wa -k T1053.002_at
+-w /var/spool/at/ -p wa -k T1053.002_at
+-w /etc/anacrontab -p wa -k T1053.003_cron
+-w /etc/systemd/system/     -k T1543.002_systemd
+-w /usr/lib/systemd/system/ -k T1543.002_systemd
+-w /run/systemd/system/     -k T1543.002_systemd
+-w /bin/systemctl -p x -k T1543.002_systemd
+-w /etc/systemd/  -p wa -k T1543.002_systemd
+-w /usr/lib/systemd -p wa -k T1543.002_systemd
+
+# --- Accounts, sudoers, credentials ----------------------------------------
+-w /etc/sudoers   -p wa -k T1078.003_sudoers
+-w /etc/sudoers.d -p wa -k T1078.003_sudoers
+-w /usr/bin/passwd -p x -k T1078.003_passwd
+-w /usr/sbin/groupadd -p x -k T1136_account
+-w /usr/sbin/groupmod -p x -k T1136_account
+-w /usr/sbin/addgroup -p x -k T1136_account
+-w /usr/sbin/useradd  -p x -k T1136_account
+-w /usr/sbin/userdel  -p x -k T1136_account
+-w /usr/sbin/usermod  -p x -k T1136_account
+-w /usr/sbin/adduser  -p x -k T1136_account
+-w /etc/group   -p wa -k T1087.001_localgroup
+-w /etc/passwd  -p wa -k T1087.001_localuser
+-w /etc/gshadow -k T1087.001_shadow
+-w /etc/shadow  -p r -k T1087.001_shadow
+-w /etc/security/opasswd -k T1087.001_opasswd
+-w /usr/bin/ldapsearch -p x -k T1087.002_ldap
+-a always,exit -S setresuid -F a0=0 -F exe=/usr/bin/sudo -k T1548.003_sudo
+-a always,exit -F dir=/home -F uid=0 -F auid>=1000 -F auid!=-1 -C auid!=obj_uid -k T1548.003_power_abuse
+-w /bin/su -p x -k T1548.003_su
+-w /usr/bin/sudo -p x -k T1548.003_sudo
+-w /usr/bin/pkexec -p x -k T1068_CVE_2021_4034
+-w /usr/bin/dbus-send -p x -k T1068_CVE_2021_3560
+-w /usr/bin/gdbus -p x -k T1068_CVE_2021_3560
+
+# --- DAC / permission modifications (attributable) -------------------------
+-a always,exit -F arch=b64 -S chmod -S fchmod -S fchmodat -F auid>=1000 -F auid!=-1 -k T1222_perm_mod
+-a always,exit -F arch=b64 -S chown -S fchown -S fchownat -S lchown -F auid>=1000 -F auid!=-1 -k T1222_perm_mod
+-a always,exit -F arch=b64 -S setxattr -S lsetxattr -S fsetxattr -S removexattr -S lremovexattr -S fremovexattr -F auid>=1000 -F auid!=-1 -k T1222_perm_mod
+
+# --- Code injection & persistence ------------------------------------------
+-a always,exit -F arch=b64 -S ptrace -k T1055.008_ptrace
+-a always,exit -F arch=b64 -S ptrace -F a0=0x4 -k T1055.008_ptrace
+-a always,exit -F arch=b64 -S ptrace -F a0=0x5 -k T1055.008_ptrace
+-a always,exit -F arch=b64 -S ptrace -F a0=0x6 -k T1055.008_ptrace
+-w /etc/ld.so.preload -k T1574.006_ldpreload
+-w /etc/ld.so.conf   -p wa -k T1574.006_ldpath
+-w /etc/ld.so.conf.d -p wa -k T1574.006_ldpath
+-a always,exit -F dir=/etc/profile.d -F perm=w -k T1546.004_shellprofile
+-w /etc/profile.d/ -k T1546.004_shellprofile
+-w /etc/profile    -k T1546.004_shellprofile
+-w /etc/shells     -k T1546.004_shellprofile
+-w /etc/bashrc     -k T1546.004_shellprofile
+-w /etc/csh.cshrc  -k T1546.004_shellprofile
+-w /etc/csh.login  -k T1546.004_shellprofile
+-w /root/.bash_profile -p w -k T1546.004_rootbash
+-w /root/.bashrc       -p w -k T1546.004_rootbash
+-w /etc/ssh/sshd_config   -p wa -k T1098.004_sshd
+-w /etc/ssh/sshd_config.d -p wa -k T1098.004_sshd
+-w /root/.ssh -p wa -k T1098.004_root_ssh
+
+# --- Special files, mounts, swap, network config ---------------------------
+-a always,exit -F arch=b64 -S mknod -S mknodat -k T1546_specialfiles
+-a always,exit -F arch=b64 -S mount -S umount2 -F auid!=-1 -k T1078_mount
+-a always,exit -F arch=b64 -S swapon -S swapoff -F auid!=-1 -k T1078_swap
+-a always,exit -F arch=b64 -S sethostname -S setdomainname -k T1082_hostname
+-w /etc/hosts -p wa -k T1565_hosts
+-w /etc/sysconfig/network -p wa -k T1565_network
+-w /etc/sysconfig/network-scripts -p w -k T1565_network
+-w /etc/network/ -p wa -k T1565_network
+-a always,exit -F dir=/etc/NetworkManager/ -F perm=wa -k T1565_networkmanager
+-w /etc/issue     -p wa -k T1082_issue
+-w /etc/issue.net -p wa -k T1082_issue
+-w /etc/hostname  -p wa -k T1082_hostname
+
+# --- Per-connection network logging INTENTIONALLY OMITTED ------------------
+## The MEDIUM/HIGH connect4/connect6/socket rules are dropped here: an
+## internet-facing host generates huge connection volume and the edge
+## NIPS/firewall already record it. Re-add from hs-audit-medium.rules if this
+## host has no network sensor in front of it.
+
+# --- Indicator removal / anti-forensics ------------------------------------
+-w /usr/bin/shred -p x -k T1070.004_shred
+-w /usr/bin/wipe  -p x -k T1070.004_wipe
+-w /usr/bin/scrub -p x -k T1070.004_scrub
+-w /usr/bin/dd    -p x -k T1070.004_dd
+-a always,exit -F arch=b64 -S rmdir -S unlink -S unlinkat -S rename -S renameat -F auid>=1000 -F auid!=-1 -k T1070.004_filedel
+-a always,exit -F arch=b64 -S rmdir -S unlink -S unlinkat -S rename -S renameat -F auid=0 -k T1070.004_filedel_root
+
+# --- Deobfuscation / decode ------------------------------------------------
+-w /usr/bin/certutil -p x -k T1140_certutil
+-w /usr/bin/unzip   -p x -k T1140_unzip
+-w /usr/bin/base64  -p x -k T1140_base64
+-w /usr/bin/openssl -p x -k T1140_openssl
+
+# --- Ingress tools / remote access -----------------------------------------
+-w /usr/bin/wget  -p x -k T1105_wget
+-w /usr/bin/curl  -p x -k T1105_curl
+-w /usr/bin/ftp   -p x -k T1105_ftp
+-w /usr/bin/scp   -p x -k T1105_scp
+-w /usr/bin/sftp  -p x -k T1105_sftp
+-w /usr/bin/ssh   -p x -k T1021.004_ssh
+-w /usr/bin/socat -p x -k T1105_socat
+-w /bin/nc        -p x -k T1105_nc
+-w /bin/nc.openbsd     -p x -k T1105_nc
+-w /bin/nc.traditional -p x -k T1105_nc
+-w /usr/bin/ncat  -p x -k T1105_ncat
+-w /usr/bin/rdesktop  -p x -k T1219_rat
+-w /usr/bin/xfreerdp  -p x -k T1219_rat
+-w /usr/bin/teamviewer -p x -k T1219_rat
+
+# --- Mail transport --------------------------------------------------------
+-w /etc/aliases  -p wa -k T1114_mail
+-w /etc/postfix/ -p wa -k T1114_mail
+-w /etc/exim4/   -p wa -k T1114_mail
+
+# --- Stunnel (customer tunnel transport - Telstra / Digicel) ---------------
+-w /usr/sbin/stunnel -p x -k T1573.002_stunnel
+-w /usr/bin/stunnel  -p x -k T1573.002_stunnel
+
+# --- MAC (SELinux) and power state -----------------------------------------
+-w /etc/selinux/ -p wa -k T1562.001_selinux
+-w /sbin/shutdown -p x -k T1529_power
+-w /sbin/poweroff -p x -k T1529_power
+-w /sbin/reboot   -p x -k T1529_power
+-w /sbin/halt     -p x -k T1529_power
+
+# --- Container runtimes / escape (T1610 / T1611) ---------------------------
+-w /usr/bin/docker  -p x -k T1610_docker
+-w /usr/bin/dockerd -p x -k T1610_docker
+-w /var/run/docker.sock -p rwa -k T1610_docker_sock
+-w /etc/docker -p wa -k T1610_docker_config
+-w /usr/bin/podman     -p x -k T1610_podman
+-w /usr/bin/containerd -p x -k T1610_containerd
+-w /usr/bin/runc       -p x -k T1610_runc
+-w /usr/bin/crictl     -p x -k T1610_crictl
+-w /usr/bin/kubelet    -p x -k T1610_kubelet
+
+# --- Software / package management -----------------------------------------
+-w /usr/bin/rpm -p x -k T1072_pkg
+-w /usr/bin/yum -p x -k T1072_pkg
+-w /usr/bin/dnf -p x -k T1072_pkg
+-w /usr/bin/zypper -k T1072_pkg
+-w /usr/bin/dpkg -p x -k T1072_pkg
+-w /usr/bin/apt-get -p x -k T1072_pkg
+-w /usr/bin/apt-add-repository -p x -k T1072_pkg
+-w /usr/bin/pip  -p x -k T1072_pkg
+-w /usr/bin/pip3 -p x -k T1072_pkg
+-w /usr/bin/npm  -p x -k T1072_pkg
+-w /usr/bin/gem  -p x -k T1072_pkg
+
+# --- Make the configuration immutable (MUST be last) -----------------------
+-e 2

@@ -1,13 +1,13 @@
 #!/bin/bash
 #
-# Install HyperSec Ansible for CentOS deployments
-# (c) HyperSec 2022
+# Install HyperI Ansible for CentOS deployments
+# (c) HyperI 2022
 #
 # v1.1      2022-11-08      Updated for RHEL5/6
 # v1.0      2019-12-16      Initial version
 
 echo
-echo "Install HyperSec Ansible versioned prerequesite insatllation"
+echo "Install HyperI Ansible versioned prerequesite insatllation"
 echo "for legacy distro support v1.1"
 echo 
 

@@ -1,7 +1,7 @@
 # collector-endpoint-linux
 
 ## Summary and Design Decisions
-Automated ansible deployment for customer Linux syslog and auditd with connectivity to HyperSec collectors. Support provided for multiple endpoint Linux distributions including end-of-life versions.
+Automated ansible deployment for customer Linux syslog and auditd with connectivity to HyperI collectors. Support provided for multiple endpoint Linux distributions including end-of-life versions.
 A minimal number of components are deployed to reduce:
 - inter-distro incompatibility of deployment 
 - inter-version dependency breakages

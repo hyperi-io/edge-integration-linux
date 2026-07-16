@@ -1,13 +1,13 @@
 #!/bin/bash
 #
-# Install HyperSec Ansible versioned for legacy distro support
-# (c) HyperSec 2022
+# Install HyperI Ansible versioned for legacy distro support
+# (c) HyperI 2022
 #
 # v1.1      2022-11-08      Updated for  RHEL5/6
 # v1.0      2019-12-16      Initial version
 
 echo
-echo "Install HyperSec Ansible versioned for legacy distro support v1.1"
+echo "Install HyperI Ansible versioned for legacy distro support v1.1"
 echo 
 
 if [ "$1" == "--help"  ] || [ "$1" == "-?"  ] ; then

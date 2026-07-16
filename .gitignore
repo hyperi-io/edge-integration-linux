@@ -1,0 +1,12 @@
+# Build artefacts
+*.tar.gz
+
+# Ansible
+*.retry
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+ansible-venvs/
