@@ -1,56 +1,176 @@
-# collector-endpoint-linux
+# edge-integration-linux
 
-## Summary and Design Decisions
-Automated ansible deployment for customer Linux syslog and auditd with connectivity to HyperI collectors. Support provided for multiple endpoint Linux distributions including end-of-life versions.
-A minimal number of components are deployed to reduce:
-- inter-distro incompatibility of deployment 
-- inter-version dependency breakages
-- deprecaction implications such as audisp
-- consideration for local disk consumption
+Ansible deployment that turns a Linux endpoint into an audit source for a HyperI
+collector. It installs and configures `auditd` and `rsyslog`, applies a chosen
+audit ruleset, and forwards audit and system events to the collector over TCP -
+across current distros and end-of-life ones alike.
 
-## What is Deployed
-Rsyslog and auditd with recommmended auditd configuration
+Two names are in play and they genuinely differ: this repository is
+`edge-integration-linux`, and the deployment artefact it builds is
+`hyperi-collector-endpoint-linux-<version>.tar.gz`.
 
-## Legacy and End-of-Life Linux Releases
-There are multiple dependency combination issues when deploying to legacy and end-of-life Linux releases. Most of these are addressed by the Ansible deployment. Ansible itself also has python and library dependencies when deploying to these systems. When deploying to the oldest of systems (e.g. RHEL4/5) a specific version of Ansible is required. If a python version or library version error is received when attemtpting to deploy this is the most likely cause.  
+## Quick start
 
-When deploying to these systems a versioned implementation of ansible is required. The support scripts to deploy this environment is located in the ansible-versioned directory.
-- First prep the system using ```hs-setup-ansible-versioned-prerequesites.sh``` (sudo account)
-- Then deploy multiple versioned ansible instances using your local account using ```hs-setup-ansible-versioned.sh```
-These will deploy the most common combinations requred for older Ubuntu, Debian, RHEL, CentOS and SUSE releases. Scripts to enable specific distro versions are placed in the installation path. These must be executed before deploying to these older systems.
+You need `ansible` on a control node. Nothing is installed on the endpoints
+beyond their own distro's `rsyslog` and `audit` packages.
 
-For some edge RHEL5 cases Python remediation is required for deployment. In these instances use with rhel5-upgrade-python.sh and rhel5-upgrade-python-local.sh scripts and associated installation files located in rhel5-ansible-prep.
+From a clone, or from an extracted deployment tarball, in the directory that
+holds `site.yml`:
 
-## SELinux
-Distros with SELinux have SELinux exceptions applied to permit safe and reliable rsyslog usage, varying on release version.
-
-## Installation
-- Extract ```tar.gz``` file to a directory 
-- Change directory to the extracted path (same directory as site.yml)
-- Create a file in ```./environments``` (and example is present that can be copied)
-    - Set the IP and hostname of the destination systems in this file - recommend creating a file per Linux distro + major version (e.g. rhel5)
-    - Set the IP and hostname of the local collector in this file
-
-## Deploy 
-Execute ```ansible-playbook site.yml -i environments/<a file you just created>```
-
-Useful commands / notes
-To use a username/password either place this in the environment file you created easier or add ```--extra-vars "ansible_user=<username> ansible_password=<password>"``` to the command or add the following to the environment: 
-```
-[all:vars]
-ansible_user=user
-ansible_password=password
+```sh
+ansible-playbook --syntax-check -i environments/example site.yml
 ```
 
-For distros with old / insecure ciphers (such as RHEL4/5) add ```-o KexAlgorithms=diffie-hellman-group1-sha1```  to the command 
+Expected output:
 
-To ignore ssh host key checking add ```-o StrictHostKeyChecking=no``` to the command
+```
+playbook: site.yml
+```
+
+That confirms ansible, the playbook and the inventory template all parse. Copy
+`environments/example`, fill in your hosts and collector, and you are ready to
+deploy - see [Deploying](#deploying).
+
+## What it does, and why
+
+The role installs `rsyslog` and `audit`, tunes `auditd.conf`, deploys an audit
+ruleset, and writes an rsyslog drop-in that forwards to your collector. On
+SELinux hosts it also permits the collector ports and installs a policy module
+so rsyslog may read the audit log. The deployed footprint is deliberately small:
+fewer moving parts means fewer inter-distro incompatibilities, fewer version
+dependency breakages, and less local disk consumed.
+
+Audit events travel `auditd -> file -> rsyslog`, not `audisp-remote`. audisp is
+fragmented across the supported range - a separate daemon and plugin directory
+in audit 2.x, merged into `auditd` in audit 3.x - whereas `rsyslog` is present
+and stable on every target, and the collector is a syslog receiver that consumes
+syslog-shaped lines. Full reasoning:
+[ADR 0001](./docs/decisions/0001-auditd-to-file-to-rsyslog-not-audisp.md).
+
+```mermaid
+flowchart LR
+  A[auditd] -->|writes| B["/var/log/audit/audit.log"]
+  B -->|imfile| C[rsyslog]
+  D[system logs] --> C
+  C -->|omfwd TCP 12201| E[HyperI collector]
+  C -->|omfwd TCP 12205| E
+```
+
+Audit records go to TCP 12201, everything else to TCP 12205.
+
+## Audit profiles
+
+Three levels plus a use-case overlay. Breadth costs host CPU and forwarding
+bandwidth, so pick for the host rather than defaulting to the widest.
+
+| Profile | Selected with | For | Trade-off |
+|---|---|---|---|
+| low | `hyperi_audit_level: low` | Constrained hosts, slow links | High-signal file and exec watches plus the cheapest kernel TTPs. The high-volume syscall auditing (per-connection network, DAC permission changes, user file deletion, IPC) is removed. |
+| medium | `hyperi_audit_level: medium` (default) | The general fleet | Balanced host telemetry. The starting point unless you have a reason. |
+| high | `hyperi_audit_level: high` | High-value hosts that can carry it | medium plus interpreter exec, the full setuid/DAC syscall family, IPC, recon tooling, data staging, session/PAM and third-party agents. Not for constrained or slow-link endpoints. |
+| internet | `hyperi_audit_use_case: internet` | Internet-facing edge hosts - web servers, reverse proxies, bastions | medium with per-connection network logging removed, on the assumption an edge NIPS and firewall already carry that telemetry. Everything else is retained. |
+
+A use-case overlay *replaces* the level's ruleset rather than layering on it, so
+setting `hyperi_audit_use_case` makes `hyperi_audit_level` moot.
+
+The rulesets themselves carry their lineage, their MITRE ATT&CK mappings and
+their traps in the `# HISTORY.` header of each
+`roles/hyperi_audit/files/hyperi-audit-*.rules` file. See
+[ARCHITECTURE.md](./ARCHITECTURE.md) for how the profiles are put together.
+
+## Configuration
+
+Role variables, set in your inventory's `vars:` block or via `--extra-vars`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `collector_address` | none - **required** | IP or DNS name of the collector receiving forwarded events. The run fails immediately if unset. |
+| `hyperi_audit_level` | `medium` | Audit profile: `low`, `medium` or `high`. Any other value fails the run. |
+| `hyperi_audit_use_case` | unset | Use-case overlay. `internet` is the one shipped. Overrides the level's ruleset when set. |
+| `hyperi_audit_start_services` | `true` | `false` writes the configuration but does not enable, stop or start `auditd` and `rsyslog`. Used by the test harness to converge inside a container that has no init. |
+
+## Deploying
+
+Copy the inventory template, name the copy for your site, and fill in the hosts
+and `collector_address`:
+
+```sh
+cp environments/example environments/mysite
+```
+
+`environments/example` is YAML and documents its own placeholders. A filled-in
+inventory with a profile and credentials looks like:
+
+```yaml
+all:
+  hosts:
+    "10.0.0.11":
+    "10.0.0.12":
+  vars:
+    collector_address: "10.0.0.9"
+    hyperi_audit_level: "high"
+    ansible_user: "user"
+    ansible_password: "password"
+```
+
+Then deploy:
+
+```sh
+ansible-playbook -i environments/mysite site.yml
+```
+
+Useful variations:
+
+- Credentials outside the inventory file:
+  `--extra-vars "ansible_user=user ansible_password=password"`
+- Prompt for the privilege escalation password: `-K` (the role escalates to root)
+- Skip SSH host key checking:
+  `--ssh-common-args='-o StrictHostKeyChecking=no'`
+
+### Building the deploy tarball (maintainers)
+
+`./build-tarball.sh` produces the customer artefact from committed state using
+`git archive`. The script is `export-ignore`d, so it is not present in the
+tarball itself - this section is for people working in the repository.
+
+## Supported distributions
+
+The automatable floor is CentOS/RHEL 6, and current mainstream distros are
+supported alongside an end-of-life bucket. [`test/matrix.yml`](test/matrix.yml)
+is the source of truth for what is actually tested; the prose view, the
+supported floor and the known gaps are in
+[docs/SUPPORTED-DISTROS.md](./docs/SUPPORTED-DISTROS.md).
+
+The oldest targets constrain the *control node*, not just the endpoint: their
+Python predates what current `ansible-core` will drive, so deploying to them
+needs a pinned, older ansible on the machine you deploy from. A python or
+library version error on an old target is almost always this, and an old
+endpoint may also refuse a modern SSH key exchange. Both have one-line answers
+in [ansible-versioned/README.md](./ansible-versioned/README.md).
+
+## Testing
+
+[`test/`](test/) is a Docker harness: a persistent rsyslog receiver plus
+disposable per-distro containers, driven by pytest. It converges the role
+config-only, seeds a marker into `audit.log`, and asserts it reaches the
+receiver. It needs only `docker` and `uv`; run it with `test/run.sh`.
+
+Read [test/README.md](./test/README.md) before trusting a green run - it is
+explicit about what the harness does not cover.
 
 ## Versioning
-Semantic Versioning and Changelog applied as per:  
-https://semver.org/  
-https://www.gitkraken.com/gitkon/semantic-versioning-git-tags  
+
+Semantic Versioning and Changelog applied as per:
+https://semver.org/
+https://www.gitkraken.com/gitkon/semantic-versioning-git-tags
 https://keepachangelog.com
 
-## Create deployment tarball
-Execute ```./build-tarball.sh```
+## Links
+
+- [ARCHITECTURE.md](./ARCHITECTURE.md) - how the pieces fit together
+- [ADR 0001](./docs/decisions/0001-auditd-to-file-to-rsyslog-not-audisp.md) - why `auditd -> file -> rsyslog`, not audisp
+- [docs/SUPPORTED-DISTROS.md](./docs/SUPPORTED-DISTROS.md) - the distro range and why EOL releases are in it
+- [ansible-versioned/README.md](./ansible-versioned/README.md) - deploying to old targets from a modern control node
+- [test/README.md](./test/README.md) - the test harness
+- [CHANGELOG.md](./CHANGELOG.md)
+- [LICENSE](./LICENSE) - Business Source License 1.1

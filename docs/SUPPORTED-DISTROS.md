@@ -22,12 +22,11 @@ syslog-shaped lines, not native audisp records.
 ## Frozen packages rule
 
 For any distro that is deliberately pinned to a known-old release, the pinned
-packages are **frozen** - never upgrade, dedup, or "fix" them (e.g.
-`rhel5-ansible-prep/` python2.6 RPMs, `ansible-versioned/` version pins, old
-crypto). Newer versions do not exist / will not install / will not run on those
-releases; upgrading breaks every collector on that distro. "The floor may move"
-(below) is a separate, deliberate decision and does NOT license upgrading the
-pins of a still-supported distro.
+packages are **frozen** - never upgrade, dedup, or "fix" them (e.g. the
+`ansible-versioned/` version pins, old crypto). Newer versions do not exist /
+will not install / will not run on those releases; upgrading breaks every
+collector on that distro. "The floor may move" (below) is a separate, deliberate
+decision and does NOT license upgrading the pins of a still-supported distro.
 
 ## Supported floor
 
@@ -41,7 +40,7 @@ TuxCare** (matrix.yml states that policy directly).
 
 | Release | Status | Image basis |
 |---------|--------|-------------|
-| RHEL/CentOS 5 | DROPPED from the automated regime (2026-07) | none safe/maintained; frozen vault only. Manual `rhel5-ansible-prep/` path only |
+| RHEL/CentOS 5 | NOT SUPPORTED (dropped 2026-07) | no safe or maintained image exists; see below |
 | RHEL/CentOS 6 | EOL bucket, best-effort. **amd64-only** | `oraclelinux:6` - skipped on an arm64 host, runs native on x64 |
 | RHEL/CentOS 7 | EOL bucket, best-effort | `oraclelinux:7` |
 | Ubuntu 18.04 / 20.04 | EOL bucket, best-effort | `ubuntu:18.04` / `ubuntu:20.04` |
@@ -54,32 +53,29 @@ TuxCare** (matrix.yml states that policy directly).
 
 **Known gaps in the automated matrix** (not statements of product non-support):
 
-- **el8 (Alma/Rocky 8) has no matrix entry.** An earlier version of this table
-  claimed "AlmaLinux/Rocky 8/9"; nothing tests el8. Add it or say so plainly.
-- **The EOL bucket is not green.** el7/ubuntu-18.04/ubuntu-20.04 do not converge
-  (their `python3` predates ansible-core's floor - see the plan's P2), and EOL
-  Ubuntu bakes need apt pointed at `old-releases.ubuntu.com`, which
-  [`../test/images/Dockerfile.deb`](../test/images/Dockerfile.deb) claims is
-  "handled by the build helper" -- **no such helper exists in this repo.** CI
-  runs that bucket with `continue-on-error: true`, so it can fail silently.
+- **el8 (Alma/Rocky 8) has no matrix entry.** Nothing tests it.
+- **The EOL bucket is not green.** el7, ubuntu-18.04 and ubuntu-20.04 do not
+  converge: their `python3` predates the floor ansible-core requires. The EOL
+  Ubuntu images also need apt pointed at `old-releases.ubuntu.com`, which
+  [`../test/images/Dockerfile.deb`](../test/images/Dockerfile.deb) refers to as
+  handled by a build helper that does not exist here. CI runs that bucket with
+  `continue-on-error: true`, so it can fail without failing the build.
 
-### RHEL/CentOS 5 dropped (2026-07)
+### RHEL/CentOS 5 is not supported (dropped 2026-07)
 
-Dropped from the automated test regime for two independent reasons:
+el5 is out of support entirely - not merely untested. The prep material that
+carried it (hand-built python2.6 RPMs, the `ansible==2.3` control-node venv) has
+been removed from the repo. Two independent reasons:
 
 1. **Never reliably automatable** - even on VMs it needed heavy manual
-   remediation (hand-built python2.6 RPMs, `ansible==2.3` venv, per-host SSH
-   `KexAlgorithms=diffie-hellman-group1-sha1`). An automated regime cannot
-   include a target that needs bespoke manual prep to become driveable.
+   remediation: hand-built python2.6 RPMs, an `ansible==2.3` venv, and per-host
+   SSH `KexAlgorithms=diffie-hellman-group1-sha1` for its obsolete ciphers. A
+   supported target cannot need bespoke manual prep to become driveable.
 2. **No safe or maintained container image** (EOL 2017-03-31) - TuxCare's floor
    is CentOS 6, there is no `ubi5` or maintained `oraclelinux:5`; only frozen,
    unpatched `centos:5.11` vault images remain.
 
-Dropping el5 from the *automated regime* is not the same as dropping el5
-*product support*: if a customer still runs el5, the existing manual
-`rhel5-ansible-prep/` path can remain as documented, out-of-band, best-effort
-legacy support - a product-support call, kept explicitly outside the automated
-test harness. The `rhel5-ansible-prep/` material stays in the repo for that.
+The floor is now el6, which remains a deliberate, supported target.
 
 ## Test regime
 
