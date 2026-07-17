@@ -9,8 +9,28 @@
 # where the newer source did it better. Roughly every second merge was followed
 # by a performance review, because breadth accrues and CPU does not.
 #   Neo23x0 (Florian Roth) -> ACSC (ASD) OpenSCAP -> NIST -> DISA STIG
-#   -> GCHQ -> US DoD
+#   -> alphagov/GDS -> US DoD -> SigmaHQ
 # Detection keys carry MITRE ATT&CK technique IDs where mapped.
+#
+# SIGMA ALIGNMENT. Our events are consumed by a pipeline that auto-ingests
+# SigmaHQ rules, so a rule here exists partly to make a Sigma rule FIREABLE: a
+# Sigma auditd rule whose event we never emit is a dead detection - it loads,
+# looks like coverage, and never matches. Rules marked "sigma:" below exist for
+# that reason. Detection logic taken from SigmaHQ (https://github.com/SigmaHQ/sigma),
+# Detection Rule License 1.1 (https://github.com/SigmaHQ/Detection-Rule-License).
+#
+# TRAP - DO NOT APPEND A SYSCALL TO AN EXISTING "-S" LIST. An unknown syscall
+# name makes auditctl drop the WHOLE rule, not just that name (auditctl.c: the
+# parse returns -1 and the rule is never sent to the kernel). "-i" stops the LOAD
+# aborting; it does NOT rescue the rule. Appending a modern syscall to a working
+# -S list therefore SILENTLY deletes that rule's entire coverage on el6/el7 -
+# and -i, the thing that makes our old-distro support work, is what hides it.
+# Every new syscall goes on its OWN line.
+#
+# DO-NOT-MERGE from upstream linux-audit: 10-base-config.rules still ships
+# --backlog_wait_time 60000, the exact host-CPU bug v3.0 fixed, and
+# 20-dont-audit.rules ships its noise suppressors commented out. Treating that
+# file as "the newer source" would reintroduce the throttle.
 #
 # Profile: LOW (selected via hyperi_audit_level=low). Leanest profile - the
 # high-signal file/exec watches plus the cheapest kernel TTPs, with the
@@ -20,22 +40,25 @@
 # where the host can carry it.
 #
 # Changelog (newest first). Entries below v3.0 were rebuilt from the merge order
-# when the pre-git tracking was retired; the sequence is what carries meaning.
-# v3.1   2026-07-17  Escalated-execution rules moved ABOVE the excludes. The
-#                    excludes match auid>=1000 + path with no euid scoping and
-#                    ran first, so `sudo cat /tmp/x` was never logged - v2.9's
-#                    perf pass had been silently masking the root-exec
-#                    detections it sat above.
+# when the pre-git tracking was retired.
+# v3.2   2026-07-17  Sigma alignment + baseline refresh. Added the rare,
+#                    high-signal rules that make otherwise-dead SigmaHQ rules
+#                    fireable, plus the Neo23x0 2026-05 socket delta.
+#                    Fixed: user crontabs were watched on the Debian path
+#                    only, so cron persistence went unlogged on the EL matrix.
+# v3.1   2026-07-17  Escalated-execution rules moved ABOVE the excludes: the
+#                    excludes match auid>=1000 + path with no euid scoping, so
+#                    below them `sudo cat /tmp/x` went unlogged.
 # v3.0   2026-07-16  Host-CPU fix + modernisation (see hyperi-audit-medium.rules).
 #                    --backlog_wait_time 0; -i first; dangling -F fix; trimmed
 #                    to the low-volume high-signal subset.
 # v2.9   2025-01-02  MITRE TIDs; non-root high-frequency execve excludes.
-#                    Customer-site perf review - the pass that added the
-#                    excludes v3.1 had to reorder.
+#                    Customer-site perf review.
 # v2.7   2024-11-07  Tiered auditd migrated from PaaS (low profile).
 # v2.6   2023-11-08  MITRE merge; virtualisation.
 # v2.5   2023-06-14  US DoD merge.
-# v2.4   2023-03-21  GCHQ merge.
+# v2.4   2023-03-21  alphagov/GDS (UK Government Digital Service) merge, via
+#                    Neo23x0. Recorded as "GCHQ" until 2026-07-17.
 # v2.3   2022-11-01  Updates, merges and fixes.
 # v2.2.1 2022-03-08  Customer-site perf review + merge.
 # v2.2   2022-01-10  HyperI infra merge.
@@ -72,14 +95,11 @@
 -f 1
 
 # --- Escalated execution (euid=0) - MUST stay ABOVE the excludes -----------
-## This order is deliberate - do not tidy it. auditd's exit filter is
-## FIRST-MATCH-WINS and the
-## excludes below match auid>=1000 + path with NO euid scoping, so with the
-## excludes first `sudo cat /tmp/x` was NEVER LOGGED: auid stays the login uid
-## (>=1000), the path matches, the exclude fires, and these rules never run.
-## NOT fixed by scoping the excludes with euid>=1000: auid=unset is 4294967295
-## (>=1000), so they also swallow root DAEMON noise today; euid-scoping them
-## would flood the backlog. Reordering keeps daemon noise out and escalation in.
+## Order matters: the exit filter is first-match-wins and the excludes below
+## match on auid+path with no euid scoping. Below them, `sudo cat /tmp/x`
+## goes unlogged - auid stays the login uid, so the exclude wins.
+## Do not scope the excludes by euid instead: auid=unset (4294967295) is
+## >=1000, so that would un-exclude every daemon and flood the backlog.
 ## DO NOT move the excludes above this block.
 -a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/tmp     -k T1059_root_tmp
 -a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/var/tmp -k T1059_root_vartmp
@@ -134,7 +154,12 @@
 -w /etc/cron.d/       -p wa -k T1053.003_cron
 -w /etc/cron.daily/   -p wa -k T1053.003_cron
 -w /etc/cron.hourly/  -p wa -k T1053.003_cron
--w /var/spool/cron/crontabs/ -k T1053.003_cron
+## User crontabs. BOTH paths are needed and each is a no-op on the other family:
+## Debian/Ubuntu use /var/spool/cron/crontabs/, RHEL/CentOS/Alma use
+## /var/spool/cron/ directly. LOW watches the spool artefact only; the
+## crontab(1) / at(1) exec rules are a MEDIUM-and-up addition.
+-w /var/spool/cron/crontabs/ -p wa -k T1053.003_cron
+-w /var/spool/cron/          -p wa -k T1053.003_cron
 -w /etc/inittab -p wa -k T1037_init
 -w /etc/init.d/ -p wa -k T1037_init
 -w /etc/systemd/system/     -k T1543.002_systemd
@@ -167,11 +192,57 @@
 -w /etc/ssh/sshd_config.d -p wa -k T1098.004_sshd
 -w /root/.ssh -p wa -k T1098.004_root_ssh
 
+# --- Rare, high-signal socket use (Neo23x0 upstream, 2026-05) --------------
+## These are RARE - they are not per-connection telemetry, which is why they
+## earn a place in LOW even though the per-connection network block does not.
+## AF_ALG (a0=38) = the KERNEL crypto API. Ransomware that encrypts via the
+## kernel instead of a userspace crypto library leaves no library trace.
+## a2=88 is the SOCKADDR_ALG bind; a1=279 is SOL_ALG on setsockopt.
+## NOTE we deliberately DROP upstream's "-F auid>=1000 -F auid!=unset" scoping:
+## that excludes daemons, and ransomware usually runs FROM a compromised
+## service (auid=unset). The cost is a few boot-time events from cryptsetup /
+## dm-crypt, which is a fair price for the indicator.
+## AF_ALG is kernel >=2.6.38, so on el6 (2.6.32) these load and never fire.
+-a always,exit -F arch=b64 -S socket -F a0=38 -F success=1 -k T1486_af_alg
+-a always,exit -F arch=b64 -S bind -F a2=88 -F success=1 -k T1486_af_alg
+-a always,exit -F arch=b64 -S setsockopt -F a1=279 -F success=1 -k T1486_af_alg
+## Raw sockets (AF_PACKET=17, SOCK_RAW=3) - sniffers and covert channels.
+-a always,exit -F arch=b64 -S socket -F a0=17 -F a1=3 -k T1040_raw_socket
+## SO_ATTACH_FILTER (a1=SOL_SOCKET=1, a2=26) - a BPF filter attached to a
+## socket, i.e. packet capture.
+-a always,exit -F arch=b64 -S setsockopt -F a1=1 -F a2=26 -k T1040_socket_bpf
+
 # --- Special files, mounts, hostname ---------------------------------------
 -a always,exit -F arch=b64 -S mknod -S mknodat -k T1546_specialfiles
 -a always,exit -F arch=b64 -S mount -S umount2 -F auid!=-1 -k T1078_mount
 -a always,exit -F arch=b64 -S sethostname -S setdomainname -k T1082_hostname
 -w /etc/hosts -p wa -k T1565_hosts
+
+# --- Anti-forensics + defence evasion (sigma: dead rules made fireable) -----
+## Each of these is a documented BYPASS of the Neo23x0 config we forked - the
+## repo CheraghiMilad/bypass-Neo23x0-auditd-config exists to defeat it - and
+## SigmaHQ already ships the detection. All are near-zero frequency.
+## syslog(2) actions: 4=SYSLOG_ACTION_READ_CLEAR, 5=CLEAR, 6=CONSOLE_OFF.
+## Wiping or muting the kernel ring buffer to destroy evidence.
+## sigma: lnx_auditd_clean_disable_dmesg_via_syslog.yml
+-a always,exit -F arch=b64 -S syslog -F a0=4 -k T1070.002_dmesg_clear
+-a always,exit -F arch=b64 -S syslog -F a0=5 -k T1070.002_dmesg_clear
+-a always,exit -F arch=b64 -S syslog -F a0=6 -k T1562.006_dmesg_off
+## personality(ADDR_NO_RANDOMIZE) - disabling ASLR to make an exploit reliable.
+## sigma: lnx_auditd_disable_aslr_protection.yml
+-a always,exit -F arch=b64 -S personality -F a0=0x40000 -k T1055.009_aslr_off
+## Our own transport's config - we forward via rsyslog, so tampering here
+## blinds the pipeline. sigma: lnx_auditd_logging_config_change.yml
+-w /etc/rsyslog.conf -p wa -k T1562.006_logging
+-w /etc/rsyslog.d/   -p wa -k T1562.006_logging
+## setenforce(8) - putting SELinux in permissive mode. setenforce 0 writes
+## /sys/fs/selinux/enforce, which -w /etc/selinux/ cannot see, so the binary
+## itself has to be watched. No baseline in our lineage covers this.
+-a always,exit -F arch=b64 -F path=/usr/sbin/setenforce -F perm=x -k T1562.001_selinux
+## systemd-run re-parents a payload to PID 1, detaching it from the caller's
+## session and auid - evasion of the auditing itself. Upstream STIG and OSPP
+## both single it out: "It is not audit aware, specifically watch it".
+-a always,exit -F arch=b64 -F path=/usr/bin/systemd-run -F perm=x -F auid!=unset -k T1548_systemd_run
 
 # --- Indicator removal (root deletions only in LOW) ------------------------
 -w /usr/bin/shred -p x -k T1070.004_shred
@@ -179,11 +250,14 @@
 -a always,exit -F arch=b64 -S rmdir -S unlink -S unlinkat -S rename -S renameat -F auid=0 -k T1070.004_filedel_root
 
 # --- Ingress tools / remote access -----------------------------------------
--w /usr/bin/wget  -p x -k T1105_wget
--w /usr/bin/curl  -p x -k T1105_curl
--w /usr/bin/ssh   -p x -k T1021.004_ssh
--w /bin/nc        -p x -k T1105_nc
--w /usr/bin/ncat  -p x -k T1105_ncat
+## DUAL-KEYED with Sigma's susp_activity - a second -k on the SAME rule (one
+## record, no extra cost). SigmaHQ's susp_c2_commands matches that key name
+## literally, so a TID-only key leaves it dead.
+-w /usr/bin/wget  -p x -k T1105_wget -k susp_activity
+-w /usr/bin/curl  -p x -k T1105_curl -k susp_activity
+-w /usr/bin/ssh   -p x -k T1021.004_ssh -k susp_activity
+-w /bin/nc        -p x -k T1105_nc -k susp_activity
+-w /usr/bin/ncat  -p x -k T1105_ncat -k susp_activity
 -w /usr/bin/socat -p x -k T1105_socat
 
 # --- Stunnel (customer tunnel transport - customer sites) ---------------

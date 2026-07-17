@@ -9,8 +9,28 @@
 # where the newer source did it better. Roughly every second merge was followed
 # by a performance review, because breadth accrues and CPU does not.
 #   Neo23x0 (Florian Roth) -> ACSC (ASD) OpenSCAP -> NIST -> DISA STIG
-#   -> GCHQ -> US DoD
+#   -> alphagov/GDS -> US DoD -> SigmaHQ
 # Detection keys carry MITRE ATT&CK technique IDs where mapped.
+#
+# SIGMA ALIGNMENT. Our events are consumed by a pipeline that auto-ingests
+# SigmaHQ rules, so a rule here exists partly to make a Sigma rule FIREABLE: a
+# Sigma auditd rule whose event we never emit is a dead detection - it loads,
+# looks like coverage, and never matches. Rules marked "sigma:" below exist for
+# that reason. Detection logic taken from SigmaHQ (https://github.com/SigmaHQ/sigma),
+# Detection Rule License 1.1 (https://github.com/SigmaHQ/Detection-Rule-License).
+#
+# TRAP - DO NOT APPEND A SYSCALL TO AN EXISTING "-S" LIST. An unknown syscall
+# name makes auditctl drop the WHOLE rule, not just that name (auditctl.c: the
+# parse returns -1 and the rule is never sent to the kernel). "-i" stops the LOAD
+# aborting; it does NOT rescue the rule. Appending a modern syscall to a working
+# -S list therefore SILENTLY deletes that rule's entire coverage on el6/el7 -
+# and -i, the thing that makes our old-distro support work, is what hides it.
+# Every new syscall goes on its OWN line.
+#
+# DO-NOT-MERGE from upstream linux-audit: 10-base-config.rules still ships
+# --backlog_wait_time 60000, the exact host-CPU bug v3.0 fixed, and
+# 20-dont-audit.rules ships its noise suppressors commented out. Treating that
+# file as "the newer source" would reintroduce the throttle.
 #
 # Profile: MEDIUM (default). Balanced host telemetry for the general fleet.
 #   LOW      = leaner subset (drops the high-volume syscall auditing)
@@ -20,13 +40,12 @@
 # Selected by the hyperi_audit_level / hyperi_audit_use_case role variables.
 #
 # Changelog (newest first). Entries below v3.0 were rebuilt from the merge order
-# when the pre-git tracking was retired; the sequence is what carries meaning.
-# v3.1  2026-07-17  Escalated-execution rules moved ABOVE the excludes. The
-#                   excludes match auid>=1000 + path with no euid scoping and
-#                   ran first, so `sudo cat /tmp/x` was never logged - v2.9's
-#                   perf pass had been silently masking the root-exec
-#                   detections it sat above. See that block for why euid
-#                   scoping the excludes is the wrong fix (auid=unset >= 1000).
+# when the pre-git tracking was retired.
+# v3.1  2026-07-17  Escalated-execution rules moved ABOVE the excludes: the
+#                   excludes match auid>=1000 + path with no euid scoping, so
+#                   below them `sudo cat /tmp/x` went unlogged. See that block
+#                   for why euid scoping the excludes is the wrong fix
+#                   (auid=unset >= 1000).
 # v3.0  2026-07-16  Host-CPU fix + modernisation.
 #                   - KERNEL CPU FIX: --backlog_wait_time 0 (was 60000). A
 #                     non-zero wait makes the kernel BLOCK/throttle syscalls
@@ -48,12 +67,12 @@
 #                     config-mgmt) that duplicated telemetry and bloated the
 #                     kernel filter; kept broad, attributable sensors instead.
 # v2.9   2025-01-02  MITRE TIDs; non-root high-frequency execve excludes.
-#                    Customer-site perf review - the pass that added the
-#                    excludes v3.1 had to reorder.
+#                    Customer-site perf review.
 # v2.7   2024-11-07  Tiered auditd (low/medium/high) migrated from PaaS.
 # v2.6   2023-11-08  MITRE merge; virtualisation.
 # v2.5   2023-06-14  US DoD merge.
-# v2.4   2023-03-21  GCHQ merge.
+# v2.4   2023-03-21  alphagov/GDS (UK Government Digital Service) merge, via
+#                    Neo23x0. Recorded as "GCHQ" until 2026-07-17.
 # v2.3   2022-11-01  Updates, merges and fixes.
 # v2.2.1 2022-03-08  Customer-site perf review + merge.
 # v2.2   2022-01-10  HyperI infra merge.
@@ -71,12 +90,12 @@
 -D
 
 ## Ignore-errors FIRST: directives, syscalls and fields a given KERNEL does
-## not know (e.g. el6's 2.6.32) are SKIPPED at load, not fatal. Verified in
-## auditctl.c: fileopt() checks the ignore flag AFTER a line fails, so even a
-## getopt "unrecognized option" (--backlog_wait_time / --loginuid-immutable on
-## an auditctl too old to know them) is swallowed, not just kernel rejections.
-## This runtime skip is per-HOST correct - it reacts to the real kernel:
-## Ubuntu 16.04 (old auditd 2.4.5 but NEW kernel 4.x) KEEPS --backlog_wait_time,
+## not know (e.g. el6's 2.6.32) are SKIPPED at load, not fatal. auditctl's
+## fileopt() checks the ignore flag AFTER a line fails, so even a getopt
+## "unrecognized option" (--backlog_wait_time / --loginuid-immutable on an
+## auditctl too old to know them) is swallowed, not just kernel rejections.
+## The skip is per-HOST correct because it reacts to the real kernel: Ubuntu
+## 16.04 (old auditd 2.4.5 but NEW kernel 4.x) KEEPS --backlog_wait_time,
 ## while el6 (OLD kernel) drops it. Do NOT swap this for a static
 ## auditd-version gate - it would wrongly strip the CPU fix on Ubuntu 16.04.
 ## (auditd.conf is the OPPOSITE: an unknown KEYWORD or VALUE is fatal at daemon
@@ -99,19 +118,11 @@
 -f 1
 
 # --- Escalated execution (euid=0) - MUST stay ABOVE the excludes -----------
-## This order is deliberate - do not tidy it. auditd's exit filter is
-## FIRST-MATCH-WINS, and the excludes below match on auid>=1000 + path with NO
-## euid scoping. With the excludes first, `sudo cat /tmp/x` was NEVER LOGGED:
-## auid stays the login uid (that is the point of auid) so it is still >=1000,
-## the path matches /bin/cat, the exclude fires, and these rules never get a
-## look. The efficiency pass silently defeated the detections it sat above.
-## Cost of this ordering: a few cheap integer compares per execve before the
-## excludes. Cheap, because a non-root execve fails `euid=0` immediately.
-## Deliberately NOT fixed by adding euid>=1000 to the excludes: auid=unset is
-## 4294967295, which is >=1000, so the excludes also swallow ROOT DAEMON noise
-## today. Scoping them by euid would un-exclude every daemon grep/ls and flood
-## the backlog - the exact load the --backlog_wait_time/priority_boost work
-## fixed. Reordering keeps daemon noise excluded while catching escalation.
+## Order matters: the exit filter is first-match-wins and the excludes below
+## match on auid+path with no euid scoping. Below them, `sudo cat /tmp/x`
+## goes unlogged - auid stays the login uid, so the exclude wins.
+## Do not scope the excludes by euid instead: auid=unset (4294967295) is
+## >=1000, so that would un-exclude every daemon and flood the backlog.
 ## DO NOT move the excludes above this block.
 -a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/home          -k T1059_root_home
 -a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/tmp           -k T1059_root_tmp
@@ -205,7 +216,14 @@
 -w /etc/cron.monthly/ -p wa -k T1053.003_cron
 -w /etc/cron.weekly/  -p wa -k T1053.003_cron
 -w /etc/crontab       -p wa -k T1053.003_cron
--w /var/spool/cron/crontabs/ -k T1053.003_cron
+## User crontabs. BOTH paths are needed and each is a no-op on the other family:
+## Debian/Ubuntu use /var/spool/cron/crontabs/, RHEL/CentOS/Alma use
+## /var/spool/cron/ directly. Watch the binary too: the spool file is the
+## artefact, crontab(1) is the actor.
+-w /var/spool/cron/crontabs/ -p wa -k T1053.003_cron
+-w /var/spool/cron/          -p wa -k T1053.003_cron
+-a always,exit -F arch=b64 -F path=/usr/bin/crontab -F perm=x -F auid>=1000 -F auid!=unset -k T1053.003_cron
+-a always,exit -F arch=b64 -F path=/usr/bin/at      -F perm=x -F auid>=1000 -F auid!=unset -k T1053.002_at
 -w /etc/inittab -p wa -k T1037_init
 -w /etc/init.d/ -p wa -k T1037_init
 -w /etc/init/   -p wa -k T1037_init
@@ -272,6 +290,26 @@
 -w /etc/ssh/sshd_config.d -p wa -k T1098.004_sshd
 -w /root/.ssh -p wa -k T1098.004_root_ssh
 
+# --- Rare, high-signal socket use (Neo23x0 upstream, 2026-05) --------------
+## Unlike the per-connection block below, these are RARE - they are not
+## per-connection telemetry, so they stay in INTERNET too.
+## AF_ALG (a0=38) = the KERNEL crypto API. Ransomware that encrypts via the
+## kernel instead of a userspace crypto library leaves no library trace.
+## a2=88 is the SOCKADDR_ALG bind; a1=279 is SOL_ALG on setsockopt.
+## NOTE we deliberately DROP upstream's "-F auid>=1000 -F auid!=unset" scoping:
+## that excludes daemons, and ransomware usually runs FROM a compromised
+## service (auid=unset). The cost is a few boot-time events from cryptsetup /
+## dm-crypt, which is a fair price for the indicator.
+## AF_ALG is kernel >=2.6.38, so on el6 (2.6.32) these load and never fire.
+-a always,exit -F arch=b64 -S socket -F a0=38 -F success=1 -k T1486_af_alg
+-a always,exit -F arch=b64 -S bind -F a2=88 -F success=1 -k T1486_af_alg
+-a always,exit -F arch=b64 -S setsockopt -F a1=279 -F success=1 -k T1486_af_alg
+## Raw sockets (AF_PACKET=17, SOCK_RAW=3) - sniffers and covert channels.
+-a always,exit -F arch=b64 -S socket -F a0=17 -F a1=3 -k T1040_raw_socket
+## SO_ATTACH_FILTER (a1=SOL_SOCKET=1, a2=26) - a BPF filter attached to a
+## socket, i.e. packet capture.
+-a always,exit -F arch=b64 -S setsockopt -F a1=1 -F a2=26 -k T1040_socket_bpf
+
 # --- Special files, mounts, swap, network config ---------------------------
 -a always,exit -F arch=b64 -S mknod -S mknodat -k T1546_specialfiles
 -a always,exit -F arch=b64 -S mount -S umount2 -F auid!=-1 -k T1078_mount
@@ -284,12 +322,43 @@
 -a always,exit -F dir=/etc/NetworkManager/ -F perm=wa -k T1565_networkmanager
 -w /etc/issue     -p wa -k T1082_issue
 -w /etc/issue.net -p wa -k T1082_issue
+
+# --- Anti-forensics + defence evasion (sigma: dead rules made fireable) -----
+## Each of these is a documented BYPASS of the Neo23x0 config we forked - the
+## repo CheraghiMilad/bypass-Neo23x0-auditd-config exists to defeat it - and
+## SigmaHQ already ships the detection. All are near-zero frequency.
+## syslog(2) actions: 4=SYSLOG_ACTION_READ_CLEAR, 5=CLEAR, 6=CONSOLE_OFF.
+## Wiping or muting the kernel ring buffer to destroy evidence.
+## sigma: lnx_auditd_clean_disable_dmesg_via_syslog.yml
+-a always,exit -F arch=b64 -S syslog -F a0=4 -k T1070.002_dmesg_clear
+-a always,exit -F arch=b64 -S syslog -F a0=5 -k T1070.002_dmesg_clear
+-a always,exit -F arch=b64 -S syslog -F a0=6 -k T1562.006_dmesg_off
+## personality(ADDR_NO_RANDOMIZE) - disabling ASLR to make an exploit reliable.
+## sigma: lnx_auditd_disable_aslr_protection.yml
+-a always,exit -F arch=b64 -S personality -F a0=0x40000 -k T1055.009_aslr_off
+## Our own transport's config - we forward via rsyslog, so tampering here
+## blinds the pipeline. sigma: lnx_auditd_logging_config_change.yml
+-w /etc/rsyslog.conf -p wa -k T1562.006_logging
+-w /etc/rsyslog.d/   -p wa -k T1562.006_logging
+## setenforce(8) - putting SELinux in permissive mode. setenforce 0 writes
+## /sys/fs/selinux/enforce, which -w /etc/selinux/ cannot see, so the binary
+## itself has to be watched. No baseline in our lineage covers this.
+-a always,exit -F arch=b64 -F path=/usr/sbin/setenforce -F perm=x -k T1562.001_selinux
+## systemd-run re-parents a payload to PID 1, detaching it from the caller's
+## session and auid - evasion of the auditing itself. Upstream STIG and OSPP
+## both single it out: "It is not audit aware, specifically watch it".
+-a always,exit -F arch=b64 -F path=/usr/bin/systemd-run -F perm=x -F auid!=unset -k T1548_systemd_run
 -w /etc/hostname  -p wa -k T1082_hostname
 
 # --- Successful outbound connections (network telemetry) -------------------
 ## High volume on egress-heavy hosts - the INTERNET profile drops this block.
--a always,exit -F arch=b64 -S connect -F a2=16 -F success=1 -F key=T1071_connect4
--a always,exit -F arch=b64 -S connect -F a2=28 -F success=1 -F key=T1071_connect6
+## DUAL-KEYED: ours (ATT&CK) + Sigma's. A rule may carry more than one -k
+## (auditctl.8) - it is ONE rule, one record, no extra cost, searchable both
+## ways. SigmaHQ hard-codes the upstream key name: its
+## network_service_scanning rule matches key='network_connect_4' literally.
+## Keep both keys - do not tidy either away.
+-a always,exit -F arch=b64 -S connect -F a2=16 -F success=1 -k T1071_connect4 -k network_connect_4
+-a always,exit -F arch=b64 -S connect -F a2=28 -F success=1 -k T1071_connect6
 -a always,exit -F arch=b64 -S socket -F a0=2  -k T1011_socket
 -a always,exit -F arch=b64 -S socket -F a0=10 -k T1011_socket
 
@@ -304,23 +373,27 @@
 # --- Deobfuscation / decode ------------------------------------------------
 -w /usr/bin/certutil -p x -k T1140_certutil
 -w /usr/bin/unzip   -p x -k T1140_unzip
--w /usr/bin/base64  -p x -k T1140_base64
+-w /usr/bin/base64  -p x -k T1140_base64 -k susp_activity
 -w /usr/bin/openssl -p x -k T1140_openssl
 
 # --- Ingress tools / remote access -----------------------------------------
--w /usr/bin/wget  -p x -k T1105_wget
--w /usr/bin/curl  -p x -k T1105_curl
+## DUAL-KEYED with Sigma's susp_activity. A rule may carry more than one -k
+## (auditctl.8) - one rule, one record, no extra cost. SigmaHQ's
+## susp_c2_commands rule matches key='susp_activity' literally (the upstream
+## key name), so a TID-only key leaves it dead. Keep both keys on these.
+-w /usr/bin/wget  -p x -k T1105_wget -k susp_activity
+-w /usr/bin/curl  -p x -k T1105_curl -k susp_activity
 -w /usr/bin/ftp   -p x -k T1105_ftp
 -w /usr/bin/scp   -p x -k T1105_scp
 -w /usr/bin/sftp  -p x -k T1105_sftp
--w /usr/bin/ssh   -p x -k T1021.004_ssh
+-w /usr/bin/ssh   -p x -k T1021.004_ssh -k susp_activity
 -w /usr/bin/socat -p x -k T1105_socat
--w /bin/nc        -p x -k T1105_nc
--w /bin/nc.openbsd     -p x -k T1105_nc
--w /bin/nc.traditional -p x -k T1105_nc
--w /usr/bin/ncat  -p x -k T1105_ncat
+-w /bin/nc        -p x -k T1105_nc -k susp_activity
+-w /bin/nc.openbsd     -p x -k T1105_nc -k susp_activity
+-w /bin/nc.traditional -p x -k T1105_nc -k susp_activity
+-w /usr/bin/ncat  -p x -k T1105_ncat -k susp_activity
 -w /usr/bin/rdesktop  -p x -k T1219_rat
--w /usr/bin/xfreerdp  -p x -k T1219_rat
+-w /usr/bin/xfreerdp  -p x -k T1219_rat -k susp_activity
 -w /usr/bin/teamviewer -p x -k T1219_rat
 
 # --- Mail transport --------------------------------------------------------
