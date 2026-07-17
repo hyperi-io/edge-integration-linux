@@ -1,0 +1,24 @@
+[project]
+name = "hyperi-audit-harness"
+version = "0.0.0"
+description = "Docker test harness for the HyperI Linux audit collector role"
+requires-python = ">=3.10"
+dependencies = [
+    "pytest>=8",
+    "ansible-core>=2.16",
+    "docker>=7",
+    "pyyaml>=6",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+addopts = "-ra -v"
+# Discover every test_*.py in this directory. Naming a single file here means any
+# test added later is silently never collected -- which is exactly what happened
+# to the profile-selection tests.
+testpaths = ["."]
+python_files = ["test_*.py"]
+norecursedirs = ["collections", ".venv", "*.egg", "images", "receiver"]
+markers = ["eol: end-of-life distro target (best-effort, may be backlogged)"]

@@ -1,9 +1,21 @@
+---
+# Inventory template. Copy it, name the copy for your site, fill in the
+# placeholders, then:
+#
+#   ansible-playbook site.yml -i environments/<the file you just created>
+#
+# Placeholders are quoted so this file stays valid YAML as shipped -- you can
+# run the command above against it and get a real error about unreachable
+# hosts, rather than an inventory that will not parse. Replace the quoted
+# values; the quotes may stay.
 all:
   hosts:
-    <ip addresss or DNS name of host here>:
-    <ip addresss or DNS name of host here>:
-    <ip addresss or DNS name of host here>:
-    <ip addresss or DNS name of host here>:
-    <ip addresss or DNS name of host here>:
+    # One entry per endpoint to audit. Add or remove lines as needed -- each
+    # host needs its own distinct line.
+    "<ip address or DNS name of host 1 here>":
+    "<ip address or DNS name of host 2 here>":
+    "<ip address or DNS name of host 3 here>":
   vars:
-    collector_address: <ip addresss or DNS name of the local collector here>:
+    # The collector that receives forwarded audit events (rsyslog omfwd, TCP
+    # 12201). One address for every host in this inventory.
+    collector_address: "<ip address or DNS name of the local collector here>"

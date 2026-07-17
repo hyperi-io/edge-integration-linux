@@ -3,6 +3,10 @@
 
 # Ansible
 *.retry
+# Created by ansible on the first local run from this directory. Git stays quiet
+# about it while its subdirs are empty, so it is easy to miss -- see the denylist
+# in build-tarball.sh, which must also exclude it.
+.ansible/
 
 # Python
 __pycache__/
@@ -10,3 +14,6 @@ __pycache__/
 .venv/
 venv/
 ansible-venvs/
+
+# Per-developer Claude Code settings (team-wide .claude/settings.json is tracked)
+.claude/settings.local.json

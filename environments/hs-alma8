@@ -1,5 +1,0 @@
-all:
-  hosts:
-    alma8-audit-telstra.test.hypersec.io:
-  vars:
-    collector_address: syslog-rec-telstra.test.hypersec.io

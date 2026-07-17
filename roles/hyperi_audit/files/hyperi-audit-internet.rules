@@ -1,11 +1,11 @@
-# HyperI Auditd INTERNET profile - for Telstra / Digicel
+# HyperI Auditd INTERNET profile - for customer sites
 # License:      BUSL-1.1
 # Copyright:    (c) 2026 HYPERI PTY LIMITED
 #
 # Forked from Neo23x0 (Florian Roth) "Best Practice Auditd Configuration".
 # Detection keys carry MITRE ATT&CK technique IDs where mapped.
 #
-# Profile: INTERNET (use-case overlay, selected via hsaudit_use_case=internet).
+# Profile: INTERNET (use-case overlay, selected via hyperi_audit_use_case=internet).
 # This is the MEDIUM profile with per-connection network logging REMOVED - for
 # internet-facing / edge hosts (web servers, reverse proxies, bastions) where a
 # NIPS + firewall already carry the connection telemetry and duplicating it in
@@ -13,7 +13,7 @@
 # (persistence, priv-esc, credential access, module/kernel TTPs) is retained.
 #
 # Changelog (newest first):
-# v3.0  2026-07-16  Host-CPU fix + modernisation (see hs-audit-medium.rules).
+# v3.0  2026-07-16  Host-CPU fix + modernisation (see hyperi-audit-medium.rules).
 #                   --backlog_wait_time 0; -i first; new kernel TTPs; dangling
 #                   -F fix; per-connection connect4/connect6/socket block
 #                   dropped for this edge use-case.
@@ -223,7 +223,7 @@
 # --- Per-connection network logging INTENTIONALLY OMITTED ------------------
 ## The MEDIUM/HIGH connect4/connect6/socket rules are dropped here: an
 ## internet-facing host generates huge connection volume and the edge
-## NIPS/firewall already record it. Re-add from hs-audit-medium.rules if this
+## NIPS/firewall already record it. Re-add from hyperi-audit-medium.rules if this
 ## host has no network sensor in front of it.
 
 # --- Indicator removal / anti-forensics ------------------------------------
@@ -261,7 +261,7 @@
 -w /etc/postfix/ -p wa -k T1114_mail
 -w /etc/exim4/   -p wa -k T1114_mail
 
-# --- Stunnel (customer tunnel transport - Telstra / Digicel) ---------------
+# --- Stunnel (customer tunnel transport - customer sites) ---------------
 -w /usr/sbin/stunnel -p x -k T1573.002_stunnel
 -w /usr/bin/stunnel  -p x -k T1573.002_stunnel
 

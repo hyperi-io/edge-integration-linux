@@ -1,0 +1,47 @@
+name: audit-collector-test-harness
+
+# Runs the Docker test harness (test/) on an x64 runner, so the FULL matrix -
+# el6/el7 included - runs natively. Current distros are required; the EOL bucket
+# is best-effort (continue-on-error), matching the "backlog if it fights" policy.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The harness only ever reads the repo and talks to the local docker daemon.
+permissions:
+  contents: read
+
+jobs:
+  current:
+    name: current distros (required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Run harness (current distros)
+        working-directory: test
+        run: ./run.sh -m "not eol" --tb=short
+
+  # continue-on-error is deliberate: the EOL bucket is KNOWN not to converge
+  # today (el7/ubuntu-18.04/20.04 ship a python3 older than ansible-core's floor,
+  # and the EOL Ubuntu bakes need apt pointed at old-releases). Without it, CI is
+  # permanently red and stops meaning anything. The cost is that this job can
+  # stay broken unnoticed -- it is not a required check and nothing reports on it.
+  # See docs/SUPPORTED-DISTROS.md "Known gaps" and the plan's P2.
+  eol:
+    name: EOL distros (best-effort)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Run harness (EOL bucket, best-effort)
+        working-directory: test
+        run: ./run.sh -m "eol" --tb=short

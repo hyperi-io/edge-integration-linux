@@ -39,7 +39,7 @@ To use a username/password either place this in the environment file you created
 ```
 [all:vars]
 ansible_user=user
-ansible_passowrd=password
+ansible_password=password
 ```
 
 For distros with old / insecure ciphers (such as RHEL4/5) add ```-o KexAlgorithms=diffie-hellman-group1-sha1```  to the command 

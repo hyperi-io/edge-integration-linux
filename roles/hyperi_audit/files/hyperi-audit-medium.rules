@@ -1,4 +1,4 @@
-# HyperI Auditd MEDIUM profile - for Telstra / Digicel
+# HyperI Auditd MEDIUM profile - for customer sites
 # License:      BUSL-1.1
 # Copyright:    (c) 2026 HYPERI PTY LIMITED
 #
@@ -10,7 +10,7 @@
 #   HIGH     = fuller coverage (adds exec/IPC/DAC/recon breadth)
 #   INTERNET = MEDIUM with per-connection logging removed (edge NIPS/firewall
 #              is assumed to carry the network telemetry)
-# Selected by the hsaudit_level / hsaudit_use_case role variables.
+# Selected by the hyperi_audit_level / hyperi_audit_use_case role variables.
 #
 # Changelog (newest first):
 # v3.0  2026-07-16  Host-CPU fix + modernisation.
@@ -294,7 +294,7 @@
 -w /etc/postfix/ -p wa -k T1114_mail
 -w /etc/exim4/   -p wa -k T1114_mail
 
-# --- Stunnel (customer tunnel transport - Telstra / Digicel) ---------------
+# --- Stunnel (customer tunnel transport - customer sites) ---------------
 -w /usr/sbin/stunnel -p x -k T1573.002_stunnel
 -w /usr/bin/stunnel  -p x -k T1573.002_stunnel
 

@@ -1,0 +1,70 @@
+# HyperI Linux audit collector - test matrix.
+# Each entry is ONE distro+version case (the pytest parametrization unit).
+#   family:   el | deb | suse  -> selects the bake Dockerfile + package manager
+#   base:     upstream image (OSS/non-licensed only - Rocky/Alma/OL/openSUSE
+#             Leap/Ubuntu/Debian/Amazon Linux; no RHEL/SLES/Pro/ESM/TuxCare)
+#   platform: pin (e.g. linux/amd64) -> host-adaptive; amd64-only images are
+#             SKIPPED on an arm64 host and run natively on an x64 host
+#   eol:      informational; EOL targets are best-effort (backlog if hard)
+receiver_image: hyperi-audit-test-receiver:latest
+network: hyperi-audit-net
+
+distros:
+  # --- current, arm64-native (verifiable on the arm64 dev host) ---
+  - id: ubuntu-26.04
+    base: ubuntu:26.04
+    family: deb
+    eol: false
+  - id: ubuntu-24.04
+    base: ubuntu:24.04
+    family: deb
+    eol: false
+  - id: debian-13
+    base: debian:13
+    family: deb
+    eol: false
+  - id: debian-12
+    base: debian:12
+    family: deb
+    eol: false
+  - id: rocky-9
+    base: rockylinux:9
+    family: el
+    eol: false
+  - id: rocky-10
+    base: rockylinux/rockylinux:10
+    family: el
+    eol: false
+  - id: alma-9
+    base: almalinux:9
+    family: el
+    eol: false
+  - id: amazonlinux-2023
+    base: amazonlinux:2023
+    family: el
+    eol: false
+  - id: opensuse-leap-15.6
+    base: opensuse/leap:15.6
+    family: suse
+    eol: false
+    python: /usr/bin/python3.11   # Leap 15.6 default python3 is 3.6 (too old)
+
+  # --- EOL bucket: best-effort. amd64-only ones auto-skip on arm64 hosts and
+  #     run natively on an x64 host (Derek's Ubuntu box). ---
+  - id: oraclelinux-7
+    base: oraclelinux:7
+    family: el
+    eol: true
+  - id: ubuntu-20.04
+    base: ubuntu:20.04
+    family: deb
+    eol: true
+  - id: ubuntu-18.04
+    base: ubuntu:18.04
+    family: deb
+    eol: true
+  - id: oraclelinux-6
+    base: oraclelinux:6
+    family: el
+    eol: true
+    platform: linux/amd64   # el6 is amd64-only -> skipped on arm64, native on x64

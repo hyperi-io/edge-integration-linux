@@ -1,0 +1,12 @@
+# HyperI audit collector test harness - SUSE bake image (openSUSE Leap / zypper).
+# Pre-installs python3.11 (openSUSE Leap 15.6's default python3 is 3.6, too old
+# for modern ansible-core - the harness pins ansible_python_interpreter to
+# /usr/bin/python3.11), plus sudo, procps (the role reads `ps`), rsyslog and
+# audit so the per-test converge is config-only and fast. openSUSE Leap reports
+# ansible_distribution "openSUSE Leap" (not "SLES"), so the role's default auditd
+# package name ("audit") is correct here.
+ARG BASE=opensuse/leap:15.6
+FROM ${BASE}
+RUN zypper --non-interactive --gpg-auto-import-keys refresh \
+ && zypper --non-interactive install python311 sudo procps rsyslog audit \
+ && zypper clean --all

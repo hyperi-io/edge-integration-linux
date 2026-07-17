@@ -1,18 +1,18 @@
-# HyperI Auditd HIGH profile - for Telstra / Digicel
+# HyperI Auditd HIGH profile - for customer sites
 # License:      BUSL-1.1
 # Copyright:    (c) 2026 HYPERI PTY LIMITED
 #
 # Forked from Neo23x0 (Florian Roth) "Best Practice Auditd Configuration".
 # Detection keys carry MITRE ATT&CK technique IDs where mapped.
 #
-# Profile: HIGH (selected via hsaudit_level=high). MEDIUM plus the heavier
+# Profile: HIGH (selected via hyperi_audit_level=high). MEDIUM plus the heavier
 # breadth: per-user + root interpreter exec, the full setuid/DAC syscall
 # family, IPC, recon toolset, data-staging, session/PAM, and third-party
 # agents. For high-value hosts that can carry the extra volume/CPU and the
 # extra forwarding bandwidth. NOT for constrained or slow-link endpoints.
 #
 # Changelog (newest first):
-# v3.0  2026-07-16  Host-CPU fix + modernisation (see hs-audit-medium.rules).
+# v3.0  2026-07-16  Host-CPU fix + modernisation (see hyperi-audit-medium.rules).
 #                   --backlog_wait_time 0; -i first; new kernel TTPs; dangling
 #                   -F fix; HIGH breadth restored on the modern base.
 # v2.7  2024-11-07  Tiered auditd migrated from PaaS (high profile).
@@ -259,7 +259,7 @@
 -w /etc/postfix/ -p wa -k T1114_mail
 -w /etc/exim4/   -p wa -k T1114_mail
 
-# --- Stunnel (customer tunnel transport - Telstra / Digicel) ---------------
+# --- Stunnel (customer tunnel transport - customer sites) ---------------
 -w /usr/sbin/stunnel -p x -k T1573.002_stunnel
 -w /usr/bin/stunnel  -p x -k T1573.002_stunnel
 

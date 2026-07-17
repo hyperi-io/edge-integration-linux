@@ -5,7 +5,7 @@
 #
 # v2.6      2026-07-16      Restored the multi-profile ruleset (low / medium /
 #                           high + internet use-case overlay), selected via the
-#                           hsaudit_level and hsaudit_use_case role variables.
+#                           hyperi_audit_level and hyperi_audit_use_case role variables.
 #                           Daemon CPU/concurrency tuning recovered from the
 #                           PaaS collector line: priority_boost 8 -> tiered
 #                           (2 low / 4 medium+high), added flush + freq. Pairs
@@ -25,7 +25,7 @@
 
 - name: Run as root
   block:
-  
+
   - name: Ensure collector_address is set
     fail: msg="Collector_address is not set"
     when: not collector_address
@@ -36,78 +36,78 @@
 
   - name: Set auditd profile level default (medium)
     set_fact:
-      hsaudit_level: "medium"
-    when: hsaudit_level is undefined
+      hyperi_audit_level: "medium"
+    when: hyperi_audit_level is undefined
 
   - name: Fail on an unknown auditd profile level
     fail:
-      msg: "hsaudit_level must be one of low|medium|high (got '{{ hsaudit_level }}')"
-    when: hsaudit_level not in ['low', 'medium', 'high']
+      msg: "hyperi_audit_level must be one of low|medium|high (got '{{ hyperi_audit_level }}')"
+    when: hyperi_audit_level not in ['low', 'medium', 'high']
 
   - name: Log auditd profile selection
     debug:
-      msg: "auditd profile level is {{ hsaudit_level }}, use-case overlay is {{ hsaudit_use_case | default('none') }}"
+      msg: "auditd profile level is {{ hyperi_audit_level }}, use-case overlay is {{ hyperi_audit_use_case | default('none') }}"
 
   - name: Populate service facts
     service_facts:
- 
+
   - name: Set auditd package default
     set_fact:
       auditd_package: audit
 
   - name: Set auditd package = audit for Ubuntu/SLES/Debian
     set_fact:
-      auditd_package: auditd 
+      auditd_package: auditd
     when: ansible_distribution == 'Ubuntu' or ansible_distribution == 'SLES' or ansible_distribution == 'Debian'
 
   - name: Install rsyslog, audit
     package:
-      name: 
+      name:
         - rsyslog
         - "{{ auditd_package }}"
       state: latest
     register: install_res
     retries: 6
     delay: 10
-    until: install_res is success    
+    until: install_res is success
 
   - name: Install SELinux dependencies
     block:
 
     - name: Install policycoreutils
       package:
-        name: 
+        name:
           - policycoreutils
         state: latest
       when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
 
     - name: Install policycoreutils-devel
       package:
-        name: 
-          - policycoreutils-devel    
+        name:
+          - policycoreutils-devel
         state: latest
-      failed_when: False    
+      failed_when: False
 
     - name: Install policycoreutils-python-utils
       package:
-        name: 
-          - policycoreutils-python-utils    
+        name:
+          - policycoreutils-python-utils
         state: latest
-      failed_when: False    
+      failed_when: False
 
     - name: Install policycoreutils-python
       package:
-        name: 
-          - policycoreutils-python  
+        name:
+          - policycoreutils-python
         state: latest
-      failed_when: False    
+      failed_when: False
 
     - name: Install libselinux-python
       package:
-        name: 
-          - libselinux-python   
+        name:
+          - libselinux-python
         state: latest
-      failed_when: False    
+      failed_when: False
 
     when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
 
@@ -116,41 +116,66 @@
     register: rsyslogd_major_version_out
 
   - name: Set rsyslogd major version fact
-    set_fact: 
+    set_fact:
       rsyslogd_major_version: "{{ rsyslogd_major_version_out.stdout }}"
 
   - name: Log rsyslogd version
     debug:
       msg: "RSyslog major version is {{ rsyslogd_major_version }}"
 
-  - name: Get daemon type 
+  - name: Get daemon type
     shell: "ps -p 1 o comm="
     register: daemon_type_out
 
   - name: Set daemon type fact
-    set_fact: 
+    set_fact:
       daemon_type: "{{ daemon_type_out.stdout }}"
 
   - name: Log daemon type
     debug:
-      msg: "Deamon type is {{ daemon_type }}"      
+      msg: "Deamon type is {{ daemon_type }}"
 
-  - name: Check for an existing immutable auditd configuration
-    find:
-      paths: /etc/audit/rules.d
-      contains: '-e 2'
-    register: found_immutable_auditd_out
+  # Ask the KERNEL whether the audit config is locked, rather than grepping
+  # /etc/audit/rules.d for "-e 2". The file-based check detected ITSELF: every
+  # ruleset this role ships ends with "-e 2", so from the second deploy onward it
+  # found the previous run's own hyperi-audit.rules, concluded the host was
+  # immutable, and skipped the auditd restart -- silently stranding every config
+  # change (the priority_boost/flush/freq CPU fix included) until an unrelated
+  # reboot. The live kernel state is also the more truthful question: what matters
+  # is whether auditd will actually accept a stop/start now, not what some file on
+  # disk asks for.
+  #
+  # Output format differs across the supported range, so match BOTH forms:
+  #   auditd 2.x (el6/el7 floor):  AUDIT_STATUS: enabled=2 flag=1 pid=...
+  #   auditd 3.x+:                 enabled 2
+  # A failure here (auditctl absent, or no audit netlink -- e.g. inside a
+  # container) leaves rc non-zero, so the fact is false and we take the normal
+  # restart path. That is the safe default: the pre-existing behaviour when the
+  # old find matched nothing.
+  - name: Check the live auditd immutable state
+    shell: "auditctl -s 2>/dev/null | grep -qE 'enabled[ =]2'"
+    register: auditd_immutable_out
+    changed_when: false
+    failed_when: false
 
   - name: Set found immutable auditd fact
-    set_fact: 
-      found_immutable_auditd: "{{ found_immutable_auditd_out.matched != 0 }}"    
+    set_fact:
+      found_immutable_auditd: "{{ auditd_immutable_out.rc == 0 }}"
 
+  # Diagnostic only -- this fact NO LONGER gates the auditd restart. See the
+  # service block at the bottom of this file for why.
   - name: Log found immutable auditd fact
     debug:
-      msg: "Immutable audit configuration found: {{ found_immutable_auditd }}"      
+      msg: >-
+        Immutable audit configuration found: {{ found_immutable_auditd }}.
+        {% if found_immutable_auditd %}
+        The kernel audit config is LOCKED (enabled=2), so the new audit RULES
+        (--backlog_wait_time included) CANNOT load until this host reboots.
+        The auditd.conf tuning still applies on the restart later in this run.
+        {% endif %}
 
   - name: Set rsyslogd legacy flag on/off
-    set_fact: 
+    set_fact:
       rsyslog_legacy: "{{ '-legacy' if rsyslogd_major_version < '7' else '' }}"
 
   - name: Ensure /etc/rsyslog.d exists
@@ -168,15 +193,15 @@
       line: "$IncludeConfig /etc/rsyslog.d/*.conf"
       state: present
 
-  - name: Build 99-hs-rsyslog.conf
+  - name: Build 99-hyperi-rsyslog.conf
     template:
-      src: "99-hs-rsyslog{{ rsyslog_legacy }}.j2"
-      dest: /etc/rsyslog.d/99-hs-rsyslog.conf
+      src: "99-hyperi-rsyslog{{ rsyslog_legacy }}.j2"
+      dest: /etc/rsyslog.d/99-hyperi-rsyslog.conf
       owner: root
       group: root
       mode: '0644'
 
-  - name: Find distro specific deployed auditd.conf 
+  - name: Find distro specific deployed auditd.conf
     find:
       paths: /etc
       patterns: "auditd.conf"
@@ -188,7 +213,7 @@
     register: auditd_major_version_out
 
   - name: Cast auditd major version
-    set_fact: 
+    set_fact:
       auditd_major_version: "{{ auditd_major_version_out.stdout }}"
 
   - name: Get auditd major_minor version
@@ -196,12 +221,12 @@
     register: auditd_major_minor_version_out
 
   - name: Cast auditd major_minor version
-    set_fact: 
+    set_fact:
       auditd_major_minor_version: "{{ auditd_major_minor_version_out.stdout }}"
 
   - name: Log auditd version
     debug:
-      msg: "Auditd version is {{ auditd_major_minor_version }}"      
+      msg: "Auditd version is {{ auditd_major_minor_version }}"
 
   - name: Set auditd log_format
     set_fact:
@@ -219,7 +244,7 @@
   - name: Lower auditd priority_boost for the low profile
     set_fact:
       priority_boost_value: "2"
-    when: hsaudit_level == 'low'
+    when: hyperi_audit_level == 'low'
 
   # flush=incremental_async is the modern default and the highest-performance
   # durable mode (async fsync). incremental_async needs audit >= 2.6, so el6
@@ -248,16 +273,16 @@
     when: auditd_path.files | length > 0
 
   - name: Set default auditd rules path
-    set_fact: 
+    set_fact:
       auditd_default_rules: "{{ '/etc/audit/audit.rules' if auditd_major_version == '1' else '/etc/audit/rules.d/audit.rules' }}"
 
   - name: Set default auditd rules present
     stat:
       path: "{{ auditd_default_rules }}"
-    register: auditd_default_rules_present    
+    register: auditd_default_rules_present
 
   - name: Rename default audit.rules if present
-    copy: 
+    copy:
       remote_src: True
       src: "{{ auditd_default_rules }}"
       dest: "{{ auditd_default_rules }}.default"
@@ -265,16 +290,16 @@
 
   - name: Set new auditd rules path
     set_fact:
-      auditd_new_rules: "{{ '/etc/audit/audit.rules' if auditd_major_version == '1' else '/etc/audit/rules.d/hs-audit.rules' }}"
+      auditd_new_rules: "{{ '/etc/audit/audit.rules' if auditd_major_version == '1' else '/etc/audit/rules.d/hyperi-audit.rules' }}"
 
   - name: Select the auditd rules source file for the profile level
     set_fact:
-      auditd_rules_file: "hs-audit-{{ hsaudit_level }}.rules"
+      auditd_rules_file: "hyperi-audit-{{ hyperi_audit_level }}.rules"
 
   - name: Override the rules source file with a use-case overlay when set
     set_fact:
-      auditd_rules_file: "hs-audit-{{ hsaudit_use_case }}.rules"
-    when: hsaudit_use_case is defined and hsaudit_use_case | length > 0
+      auditd_rules_file: "hyperi-audit-{{ hyperi_audit_use_case }}.rules"
+    when: hyperi_audit_use_case is defined and hyperi_audit_use_case | length > 0
 
   - name: Copy new auditd rules
     copy:
@@ -284,11 +309,16 @@
       group: root
       mode: '0644'
 
-  - name: Check for sysctl auditd 
+  - name: Check for sysctl auditd
     stat:
       path: /usr/lib/systemd/system/auditd.service
     register: sysctl_auditd
 
+  # Paired with "Remove audit stop temporarily" in the service block below, which
+  # puts RefuseManualStop back to yes. BOTH must carry the same
+  # hyperi_audit_start_services gate: the revert lives inside that block, so
+  # permitting unconditionally would leave the systemd protection disabled
+  # forever in config-only mode.
   - name: Permit audit stop temporarily for systemctl
     lineinfile:
       state: present
@@ -297,9 +327,9 @@
       line: '{{ item.replace }}'
     with_items:
       - { search: 'RefuseManualStop', replace: 'RefuseManualStop=no' }
-    when: sysctl_auditd.stat.exists
+    when: sysctl_auditd.stat.exists and hyperi_audit_start_services | default(true) | bool
 
-  - name: Configure SELinux 
+  - name: Configure SELinux
     block:
 
     - name: SELinux allow rsyslog to send to TCP/12201
@@ -342,52 +372,79 @@
 
     when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
 
-  - name: Daemon reload 
-    service:
-      daemon_reload: yes
-    when: daemon_type == 'systemd'  
+  # Service management (enable/start/stop of auditd + rsyslog). Gated by
+  # hyperi_audit_start_services (default true = normal deploy). The Docker test
+  # harness sets it false to run config-only in a plain container that has no
+  # init to drive the service module, then starts rsyslogd itself and seeds
+  # audit.log to prove forwarding.
+  - name: Manage auditd and rsyslog services
+    when: hyperi_audit_start_services | default(true) | bool
+    block:
 
-  - name: Enable rsyslog
-    service:
-      name: rsyslog
-      enabled: yes 
-    
-  - name: Enable auditd
-    service:
-      name: auditd
-      enabled: yes
-  
-  - name: Stop auditd
-    service:
-      name: auditd
-      state: stopped
-    when: found_immutable_auditd != True
+    - name: Daemon reload
+      service:
+        daemon_reload: yes
+      when: daemon_type == 'systemd'
 
-  - name: Stop rsyslog
-    service:
-      name: rsyslog
-      state: stopped
+    - name: Enable rsyslog
+      service:
+        name: rsyslog
+        enabled: yes
 
-  - name: Remove audit stop temporarily for systemctl
-    lineinfile:
-      state: present
-      path: /usr/lib/systemd/system/auditd.service
-      regexp: '^\s*{{ item.search }}\s*=\s*.*'
-      line: '{{ item.replace }}'
-    with_items:
-      - { search: 'RefuseManualStop', replace: 'RefuseManualStop=yes' }
-    when: sysctl_auditd.stat.exists      
+    - name: Enable auditd
+      service:
+        name: auditd
+        enabled: yes
 
-  - name: Start auditd
-    service:
-      name: auditd
-      state: started
-    when: found_immutable_auditd != True
+    # The auditd restart is DELIBERATELY NOT gated on found_immutable_auditd.
+    #
+    # The payload of a run splits in two, and immutability only blocks HALF of it:
+    #   * auditd.conf (priority_boost / flush / freq / log_format) is DAEMON
+    #     config, read at daemon start. It applies on this restart even when the
+    #     kernel audit config is locked.
+    #   * the .rules file (--backlog_wait_time et al) is KERNEL state. Under
+    #     "-e 2" it cannot load until reboot, restart or no restart.
+    # Skipping the restart when immutable therefore stranded the daemon-side CPU
+    # fix for no benefit -- and because every ruleset we ship ENDS with "-e 2",
+    # the host is immutable on every deploy after the first, so it was stranded
+    # on every host that had already run this role. Restart regardless; the
+    # rules land at the next reboot.
+    #
+    # UNVERIFIED, and it must be proven on a real host before fleet rollout
+    # (plan P3): whether "stop auditd" is refused under "-e 2" on the older
+    # auditd versions in range. A container cannot answer this -- audit netlink
+    # is host-global, so the harness never runs this block at all. If a stop IS
+    # refused here, this task fails LOUDLY, which is the intended trade: a
+    # visible failure beats silently not applying the fix.
+    - name: Stop auditd
+      service:
+        name: auditd
+        state: stopped
 
-  - name: Start rsyslog
-    service:
-      name: rsyslog
-      state: started    
+    - name: Stop rsyslog
+      service:
+        name: rsyslog
+        state: stopped
+
+    - name: Remove audit stop temporarily for systemctl
+      lineinfile:
+        state: present
+        path: /usr/lib/systemd/system/auditd.service
+        regexp: '^\s*{{ item.search }}\s*=\s*.*'
+        line: '{{ item.replace }}'
+      with_items:
+        - { search: 'RefuseManualStop', replace: 'RefuseManualStop=yes' }
+      when: sysctl_auditd.stat.exists
+
+    - name: Start auditd
+      service:
+        name: auditd
+        state: started
+
+    - name: Start rsyslog
+      service:
+        name: rsyslog
+        state: started
 
   become: yes
   become_user: root

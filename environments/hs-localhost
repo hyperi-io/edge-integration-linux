@@ -1,6 +1,0 @@
-all:
-  hosts:
-    localhost:
-      ansible_user: luser
-  vars:
-    collector_address: syslog-rec-telstra.test.hypersec.io

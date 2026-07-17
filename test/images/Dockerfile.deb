@@ -1,0 +1,12 @@
+# HyperI audit collector test harness - Debian/Ubuntu bake image.
+# Pre-installs python3 (for ansible), sudo, procps (the role reads `ps` for
+# daemon detection), rsyslog and auditd so the per-test converge is config-only
+# and fast (the slow apt install happens once, here, at bake time - the caching
+# design). BASE is passed at build time per matrix entry. NOTE: fully-EOL Ubuntu
+# (18.04/20.04) may need apt pointed at old-releases; handled by the build helper.
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 sudo procps rsyslog auditd \
+ && rm -rf /var/lib/apt/lists/*

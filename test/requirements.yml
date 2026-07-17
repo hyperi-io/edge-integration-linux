@@ -1,0 +1,10 @@
+---
+# Ansible collections the test harness needs. Installed into ./collections by
+# run.sh (or: ansible-galaxy collection install -r requirements.yml -p ./collections).
+#   community.docker  - the docker connection plugin (converge over `docker exec`)
+#   community.general - the `zypper` module (SUSE package management)
+collections:
+  - name: community.docker
+    version: ">=3.10.0"
+  - name: community.general
+    version: ">=9.0.0"

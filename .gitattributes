@@ -1,0 +1,11 @@
+# Paths marked export-ignore are omitted from `git archive`, which is how
+# build-tarball.sh builds the customer deploy artefact. This is the ALLOWLIST
+# side of the release boundary: git archive ships TRACKED files only, so
+# untracked and ignored material (.hyperi-ai plans, .claude config, .ansible and
+# .venv caches, a stray environments/<customer> inventory) can never reach a
+# customer by accident. Only tracked-but-internal paths need naming here.
+/build-tarball.sh export-ignore
+/.github         export-ignore
+/.gitattributes  export-ignore
+/.gitignore      export-ignore
+/test            export-ignore
