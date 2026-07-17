@@ -2,7 +2,14 @@
 # License:      BUSL-1.1
 # Copyright:    (c) 2026 HYPERI PTY LIMITED
 #
-# Forked from Neo23x0 (Florian Roth) "Best Practice Auditd Configuration".
+# HISTORY. Forked from Neo23x0 (Florian Roth) "Best Practice Auditd
+# Configuration" (Apache-2.0), then progressively merged with the public
+# baselines below. Method, and it matters when reading the changelog: each merge
+# took the DELTA the newer source had that we did not, and replaced our line
+# where the newer source did it better. Roughly every second merge was followed
+# by a performance review, because breadth accrues and CPU does not.
+#   Neo23x0 (Florian Roth) -> ACSC (ASD) OpenSCAP -> NIST -> DISA STIG
+#   -> GCHQ -> US DoD
 # Detection keys carry MITRE ATT&CK technique IDs where mapped.
 #
 # Profile: LOW (selected via hyperi_audit_level=low). Leanest profile - the
@@ -12,12 +19,30 @@
 # resource- or bandwidth-constrained hosts and slow links. Step up to MEDIUM
 # where the host can carry it.
 #
-# Changelog (newest first):
-# v3.0  2026-07-16  Host-CPU fix + modernisation (see hyperi-audit-medium.rules).
-#                   --backlog_wait_time 0; -i first; dangling -F fix; trimmed
-#                   to the low-volume high-signal subset.
-# v2.7  2024-11-07  Tiered auditd migrated from PaaS (low profile).
-# v1.4  2021-01-11  Initial fork from Neo23x0.
+# Changelog (newest first). Entries below v3.0 were rebuilt from the merge order
+# when the pre-git tracking was retired; the sequence is what carries meaning.
+# v3.1   2026-07-17  Escalated-execution rules moved ABOVE the excludes. The
+#                    excludes match auid>=1000 + path with no euid scoping and
+#                    ran first, so `sudo cat /tmp/x` was never logged - v2.9's
+#                    perf pass had been silently masking the root-exec
+#                    detections it sat above.
+# v3.0   2026-07-16  Host-CPU fix + modernisation (see hyperi-audit-medium.rules).
+#                    --backlog_wait_time 0; -i first; dangling -F fix; trimmed
+#                    to the low-volume high-signal subset.
+# v2.9   2025-01-02  MITRE TIDs; non-root high-frequency execve excludes.
+#                    Customer-site perf review - the pass that added the
+#                    excludes v3.1 had to reorder.
+# v2.7   2024-11-07  Tiered auditd migrated from PaaS (low profile).
+# v2.6   2023-11-08  MITRE merge; virtualisation.
+# v2.5   2023-06-14  US DoD merge.
+# v2.4   2023-03-21  GCHQ merge.
+# v2.3   2022-11-01  Updates, merges and fixes.
+# v2.2.1 2022-03-08  Customer-site perf review + merge.
+# v2.2   2022-01-10  HyperI infra merge.
+# v1.7   2021-09-03  DISA STIG merge.
+# v1.6   2021-06-23  NIST merge.
+# v1.5   2021-06-01  ACSC OpenSCAP merge.
+# v1.4   2021-01-11  Initial fork from Neo23x0.
 #
 # Assumes a 64-bit host (see the 32-bit ABI tripwire). Events are forwarded
 # off-box via rsyslog imfile reading /var/log/audit/audit.log, NOT audisp.
@@ -46,7 +71,23 @@
 ## Failure mode: 1 = printk (0 silent, 2 panic).
 -f 1
 
+# --- Escalated execution (euid=0) - MUST stay ABOVE the excludes -----------
+## This order is deliberate - do not tidy it. auditd's exit filter is
+## FIRST-MATCH-WINS and the
+## excludes below match auid>=1000 + path with NO euid scoping, so with the
+## excludes first `sudo cat /tmp/x` was NEVER LOGGED: auid stays the login uid
+## (>=1000), the path matches, the exclude fires, and these rules never run.
+## NOT fixed by scoping the excludes with euid>=1000: auid=unset is 4294967295
+## (>=1000), so they also swallow root DAEMON noise today; euid-scoping them
+## would flood the backlog. Reordering keeps daemon noise out and escalation in.
+## DO NOT move the excludes above this block.
+-a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/tmp     -k T1059_root_tmp
+-a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/var/tmp -k T1059_root_vartmp
+-a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/dev/shm -k T1059_root_devshm
+-a always,exit -F arch=b64 -S execve -F euid=0 -F suid!=0 -k T1059_setuid_exec
+
 # --- Exclude high-frequency, low-risk records (efficiency) -----------------
+## Cheap excludes, kept early - but BELOW the escalated-execution block above.
 -a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/usr/bin/grep   -F perm=x -k T1059_exclude
 -a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/usr/bin/sleep  -F perm=x -k T1059_exclude
 -a never,exit -F arch=b64 -S execve -F auid>=1000 -F path=/bin/ls         -F perm=x -k T1059_exclude
@@ -63,12 +104,6 @@
 -a never,exit -F arch=b64 -S adjtimex -F auid=unset -F uid=chrony -F subj_type=chronyd_t -k T1099_chrony_ignore
 -a never,exit -F arch=b64 -S all -F exe=/usr/bin/vmtoolsd -k T1569_vmwaretools_ignore
 -a never,exit -F arch=b64 -F dir=/dev/shm -k T1135_sharedmem_ignore
-
-# --- Suspicious root execution context (efficient, euid=0 scoped) ----------
--a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/tmp     -k T1059_root_tmp
--a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/var/tmp -k T1059_root_vartmp
--a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/dev/shm -k T1059_root_devshm
--a always,exit -F arch=b64 -S execve -F euid=0 -F suid!=0 -k T1059_setuid_exec
 
 # --- Self auditing ---------------------------------------------------------
 -w /var/log/audit/ -p wra -k T1005_auditlog

@@ -8,8 +8,8 @@
 # drives both the rm and the archive, so the previous artefact is actually
 # removed.
 #
-# The archive is built with `git archive`, NOT tar-from-".", and that choice is
-# load-bearing:
+# The archive is built with `git archive`, NOT tar-from-".". That choice is
+# deliberate and worth keeping:
 #
 #   * It ships TRACKED FILES ONLY. A denylist ships anything it forgets to name,
 #     and it cannot name what does not exist yet -- .ansible/ leaked exactly that

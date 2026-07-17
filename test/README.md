@@ -7,6 +7,40 @@ distro and throws it away. The one long-lived piece - the central syslog
 collector - is a container that persists for the whole run, exactly like the
 old collector VM.
 
+## Test regime history
+
+The test regime is versioned in its own right, because "which regime tested this
+release" is a question you will be asked and the answer changed at 3.1.
+
+| Regime | Releases tested | How it worked |
+|---|---|---|
+| **VM fleet** | up to 3.0 (2026-07-16) | One long-lived VM per distro (`<distro>-audit.test.hyperi.io`), snapshot and reset between runs, driven by hand from `deploy/ansible-deploy-test-*.sh` against per-distro `environments/hs-<distro>` inventories, forwarding to a collector VM. Retired 2026-07-17: the VMs, the deploy scripts and the per-distro inventories all went with it. |
+| **Docker harness v1.0** | 3.1 (2026-07-17) | This directory. Same shape - disposable per-distro target, one persistent collector - with containers instead of VMs, driven by pytest, and no hosts to maintain. |
+
+Why it was worth migrating: the VM fleet needed nine machines kept alive and
+reset by hand, so in practice it ran rarely and drifted. The container regime
+runs the whole current matrix in ~5 minutes on a laptop and in CI on every push.
+
+What it cost: the VM regime *could* have generated real kernel audit events on a
+real kernel. The container regime cannot (see below) - that capability was not
+actually exercised, but the ceiling is lower now. Real-event testing needs a
+privileged disposable VM, tracked separately.
+
+### Harness changelog
+
+    v1.1  2026-07-17  Profile-selection tests (test_profiles.py): the role must
+                      deploy the ruleset it was ASKED for (low/medium/high +
+                      the internet overlay), byte-compared against the role's
+                      own source file. Until this, only `medium` was ever
+                      converged and the deployed file was only checked for
+                      being non-empty.
+                      pyproject testpaths widened from a single named file to
+                      "." - a hardcoded testpaths silently never collects any
+                      test added later.
+    v1.0  2026-07-17  Initial port from the VM regime. Nine current distros
+                      green; EOL bucket best-effort; el6 amd64-only and
+                      host-adaptive.
+
 ## What it proves
 
 For every distro+version in [`matrix.yml`](matrix.yml), one at a time:
@@ -26,14 +60,39 @@ The receiver is a **session fixture**: it comes up once, every distro forwards
 into its shared `received.log`, and it stops at the end. Each distro seeds a
 distro-unique marker so its assertion greps only its own lines.
 
+Separately, [`test_profiles.py`](test_profiles.py) asserts the role deploys the
+ruleset it was **asked** for - low/medium/high plus the `internet` use-case
+overlay - by byte-comparing the deployed file against the role's own source. One
+representative distro: profile selection is ansible-side variable logic and is
+identical on every target.
+
 ## What it deliberately does NOT test
+
+Read this before trusting a green run. The gaps are real, and one of them hid a
+production bug until a 2026-07 review.
 
 **Real kernel audit-event generation.** The kernel audit subsystem is
 host-global (`NETLINK_AUDIT` is not per-netns), so a container cannot truly load
 rules or generate real syscall events. We **seed** `audit.log` instead, which
 exercises the entire forwarding contract (the valuable part) without needing a
-real kernel event. Real-event generation would need a dedicated host per distro;
-it is out of scope for the container harness.
+real kernel event. Consequences worth naming:
+
+- **The rules are never loaded, so no rule is ever proven to FIRE.** A ruleset
+  that auditctl would reject, or a detection masked by an exclude ordered above
+  it, passes here. Exactly that bug existed from 2025-01 to 2026-07: the
+  high-frequency excludes shadowed the `euid=0` root-exec detections and every
+  run stayed green.
+- **The service-management tail never runs** (the harness converges with
+  `hyperi_audit_start_services: false`, because a plain container has no init to
+  drive the service module). So the auditd enable/stop/start path - including the
+  immutable-config handling - is untested here. That is where the 2026-07
+  "restart skipped on every deploy after the first" bug lived.
+- **auditd itself is never started**, so nothing proves `auditd.conf` is even
+  parseable by the daemon, let alone that an unknown keyword is not fatal.
+
+None of this is fixable in a container; it needs a privileged disposable VM.
+Until that exists, a green run means "the config is written correctly and
+forwards", not "the auditing works".
 
 ## Host-adaptive (arm64 vs x64)
 
@@ -76,10 +135,12 @@ skip on arm64.
 ## Caching
 
 The per-distro bake pre-installs the slow packages once, so the per-test
-converge is fast config-only. Docker layer cache makes re-bakes near-instant. In
-CI / on a shared host these bake images can be pushed to Harbor
-(`harbor.devex.hyperi.io:8443`) and pulled, and Harbor can front the upstream
-bases as a pull-through cache.
+converge is fast config-only. Docker layer cache makes re-bakes near-instant.
+
+**Not wired up:** pushing the bake images to Harbor
+(`harbor.devex.hyperi.io:8443`) and fronting the upstream bases with a
+pull-through cache is a possible future optimisation. CI does neither today -
+there is no Harbor login or cache step in the workflow.
 
 ## Layout
 
@@ -92,7 +153,8 @@ test/
   ansible.cfg           # roles_path + community.docker connection
   harness.py            # docker/ansible helpers
   conftest.py           # session network + receiver fixtures; eol marker
-  test_forwarding.py    # the parametrized e2e
+  test_forwarding.py    # the parametrized e2e (config + forwarding, per distro)
+  test_profiles.py      # the role deploys the profile it was asked for
   run.sh                # portable entrypoint
 ```
 
