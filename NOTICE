@@ -1,0 +1,18 @@
+edge-integration-linux
+Copyright (c) 2026 HYPERI PTY LIMITED
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes and adapts third-party detection content:
+
+  auditd rulesets (roles/hyperi_audit/files/hyperi-audit-*.rules)
+    Forked from Neo23x0 (Florian Roth) "Best Practice Auditd Configuration"
+      https://github.com/Neo23x0/auditd  --  Apache License 2.0
+    Then merged with deltas from the public baselines: ACSC (ASD) OpenSCAP,
+    NIST, DISA STIG, alphagov/GDS, and US DoD.
+    Sigma-aligned rules adapt detection logic from SigmaHQ
+      https://github.com/SigmaHQ/sigma  --  Detection Rule License 1.1
+      https://github.com/SigmaHQ/Detection-Rule-License
+
+Per-file lineage and attribution are recorded in the "# HISTORY." header of
+each ruleset file. Retain these notices in redistributed copies.

@@ -3,7 +3,7 @@ Project:      HyperI Linux audit collector
 File:         docs/decisions/0001-auditd-to-file-to-rsyslog-not-audisp.md
 Purpose:      ADR -- why audit records leave the endpoint via rsyslog reading
               audit.log, rather than via an audisp plugin.
-License:      BUSL-1.1
+License:      Apache-2.0
 Copyright:    (c) 2026 HYPERI PTY LIMITED
 -->
 

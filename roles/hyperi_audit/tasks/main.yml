@@ -1,6 +1,6 @@
 ---
 # HyperI tasks file for Linux Audit deployment to collector
-# License:      BUSL-1.1
+# License:      Apache-2.0
 # Copyright:    (c) 2026 HYPERI PTY LIMITED
 #
 # v2.6      2026-07-16      Restored the multi-profile ruleset (low / medium /

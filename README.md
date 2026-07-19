@@ -174,4 +174,4 @@ https://keepachangelog.com
 - [ansible-versioned/README.md](./ansible-versioned/README.md) - deploying to old targets from a modern control node
 - [test/README.md](./test/README.md) - the test harness
 - [CHANGELOG.md](./CHANGELOG.md)
-- [LICENSE](./LICENSE) - Business Source License 1.1
+- [LICENSE](./LICENSE) - Apache License 2.0

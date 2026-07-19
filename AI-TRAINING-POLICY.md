@@ -10,7 +10,7 @@ LIMITED and its related entities (collectively "HyperI").
 
 **These AI terms are a separate instrument. They are referenced by, but are
 NOT incorporated into, and are NOT a condition of, the grant under the
-Business Source License 1.1 (the "License") in the [LICENSE](LICENSE) file.**
+Apache License, Version 2.0 (the "License") in the [LICENSE](LICENSE) file.**
 The License text contains no AI or machine-learning terms. This policy stands
 alongside the License and the Affiliate Annexure.
 
@@ -52,7 +52,7 @@ The following uses are permitted without additional consent:
   Claude, ChatGPT) to assist with writing code that interacts with or extends
   the Materials, provided the Materials themselves are not used as training
   data for those tools
-- **License-governed use** -- Uses permitted by the Business Source License
+- **License-governed use** -- Uses permitted by the Apache License, Version 2.0
   1.1 and its Additional Use Grant remain governed by the [LICENSE](LICENSE)
   file. This policy is separate and does not amend, narrow, or condition that
   grant.

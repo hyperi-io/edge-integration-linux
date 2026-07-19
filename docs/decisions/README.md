@@ -2,7 +2,7 @@
 Project:      HyperI Linux audit collector
 File:         docs/decisions/README.md
 Purpose:      Landing page for the architecture decision records.
-License:      BUSL-1.1
+License:      Apache-2.0
 Copyright:    (c) 2026 HYPERI PTY LIMITED
 -->
 

@@ -4,7 +4,7 @@ File:         ARCHITECTURE.md
 Purpose:      The code map -- pipeline, deployed artefacts, profile tiers,
               deploy order, the invariants a maintainer must not break, and
               what the test harness does and does not prove.
-License:      BUSL-1.1
+License:      Apache-2.0
 Copyright:    (c) 2026 HYPERI PTY LIMITED
 -->
 
