@@ -60,7 +60,7 @@ Audit records go to TCP 12201, everything else to TCP 12205.
 
 ## Audit profiles
 
-Three levels plus a use-case overlay. Breadth costs host CPU and forwarding
+Three levels plus a use-case profile. Breadth costs host CPU and forwarding
 bandwidth, so pick for the host rather than defaulting to the widest.
 
 | Profile | Selected with | For | Trade-off |
@@ -68,10 +68,11 @@ bandwidth, so pick for the host rather than defaulting to the widest.
 | low | `hyperi_audit_level: low` | Constrained hosts, slow links | High-signal file and exec watches plus the cheapest kernel TTPs. The high-volume syscall auditing (per-connection network, DAC permission changes, user file deletion, IPC) is removed. |
 | medium | `hyperi_audit_level: medium` (default) | The general fleet | Balanced host telemetry. The starting point unless you have a reason. |
 | high | `hyperi_audit_level: high` | High-value hosts that can carry it | medium plus interpreter exec, the full setuid/DAC syscall family, IPC, recon tooling, data staging, session/PAM and third-party agents. Not for constrained or slow-link endpoints. |
-| internet | `hyperi_audit_use_case: internet` | Internet-facing edge hosts - web servers, reverse proxies, bastions | medium with per-connection network logging removed, on the assumption an edge NIPS and firewall already carry that telemetry. Everything else is retained. |
+| internet | `hyperi_audit_profile_override: internet` | Internet-facing edge hosts - web servers, reverse proxies, bastions | medium with per-connection network logging removed, on the assumption an edge NIPS and firewall already carry that telemetry. Everything else is retained. |
 
-A use-case overlay *replaces* the level's ruleset rather than layering on it, so
-setting `hyperi_audit_use_case` makes `hyperi_audit_level` moot.
+`hyperi_audit_profile_override` *replaces* the level's ruleset rather than
+layering on it, so setting it makes `hyperi_audit_level` moot. The role warns
+when you set both.
 
 The rulesets themselves carry their lineage, their MITRE ATT&CK mappings and
 their traps in the `# HISTORY.` header of each
@@ -86,7 +87,7 @@ Role variables, set in your inventory's `vars:` block or via `--extra-vars`.
 |---|---|---|
 | `collector_address` | none - **required** | IP or DNS name of the collector receiving forwarded events. The run fails immediately if unset. |
 | `hyperi_audit_level` | `medium` | Audit profile: `low`, `medium` or `high`. Any other value fails the run. |
-| `hyperi_audit_use_case` | unset | Use-case overlay. `internet` is the one shipped. Overrides the level's ruleset when set. |
+| `hyperi_audit_profile_override` | unset | Replaces the level's ruleset with a named use-case profile; `internet` is the one shipped. An unknown value fails the run. Formerly `hyperi_audit_use_case`. |
 | `hyperi_audit_start_services` | `true` | `false` writes the configuration but does not enable, stop or start `auditd` and `rsyslog`. Used by the test harness to converge inside a container that has no init. |
 
 ## Deploying

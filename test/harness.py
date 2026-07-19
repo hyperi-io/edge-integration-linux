@@ -129,13 +129,13 @@ def _ansible_env():
     return env
 
 
-def rules_source(level=None, use_case=None):
+def rules_source(level=None, profile_override=None):
     """The role file a given profile selection is expected to deploy verbatim."""
-    stem = use_case if use_case else (level or "medium")
+    stem = profile_override if profile_override else (level or "medium")
     return ROLE_FILES / f"hyperi-audit-{stem}.rules"
 
 
-def converge(distro, level="medium", use_case=None):
+def converge(distro, level="medium", profile_override=None):
     """Apply the role in config-only mode over the community.docker connection."""
     name = uut_name(distro)
     cmd = [
@@ -154,10 +154,10 @@ def converge(distro, level="medium", use_case=None):
         "-e",
         f"ansible_host={name}",
     ]
-    # The use-case overlay REPLACES the level's rules file when set; the role
-    # treats an empty/undefined value as "no overlay", so only pass it when asked.
-    if use_case:
-        cmd += ["-e", f"hyperi_audit_use_case={use_case}"]
+    # The profile override REPLACES the level's rules file when set; the role
+    # treats an empty/undefined value as "no override", so only pass it when asked.
+    if profile_override:
+        cmd += ["-e", f"hyperi_audit_profile_override={profile_override}"]
     # Some distros ship a too-old default python3 for modern ansible-core
     # (e.g. openSUSE Leap 15.6 -> 3.6); pin a newer interpreter when set.
     if distro.get("python"):

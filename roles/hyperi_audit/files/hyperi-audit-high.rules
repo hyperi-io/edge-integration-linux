@@ -40,6 +40,12 @@
 #
 # Changelog (newest first). Entries below v3.0 were rebuilt from the merge order
 # when the pre-git tracking was retired.
+# v3.3   2026-07-20  Baseline refresh from ACSC/NIST/DISA STIG: AppArmor MAC
+#                    tamper (Ubuntu was a whole-distro blind spot), nsswitch,
+#                    legacy pam.conf, gpasswd/chage, fchmodat2 (own line -
+#                    modern-kernel chmod), open_by_handle_at (own line - Shocker
+#                    container escape). The hyperi_audit_use_case role variable
+#                    was renamed hyperi_audit_profile_override.
 # v3.2   2026-07-17  Sigma alignment + baseline refresh. Added the rare,
 #                    high-signal rules that make otherwise-dead SigmaHQ rules
 #                    fireable, plus the Neo23x0 2026-05 socket delta.
@@ -182,6 +188,10 @@
 # --- Modern kernel-level TTPs (newer kernels; el6 skips via -i) -------------
 -a always,exit -F arch=b64 -S bpf -k T1055_ebpf
 -a always,exit -F arch=b64 -S setns -S unshare -k T1611_namespace
+## open_by_handle_at - the Shocker container escape. Its OWN line (never folded
+## into an -S list): it resolves a file by handle and bypasses paths entirely,
+## so no path/dir-scoped rule can catch it.
+-a always,exit -F arch=b64 -S open_by_handle_at -F auid>=1000 -F auid!=-1 -k T1611_shocker
 -a always,exit -F arch=b64 -S io_uring_setup -k T1562_io_uring
 -a always,exit -F arch=b64 -S memfd_create -k T1620_memfd
 
@@ -240,6 +250,11 @@
 -w /usr/sbin/userdel  -p x -k T1136_account
 -w /usr/sbin/usermod  -p x -k T1136_account
 -w /usr/sbin/adduser  -p x -k T1136_account
+## gpasswd (group membership) and chage (password ageing) - the account-manip
+## siblings the useradd/usermod/group* watches above miss. auid-scoped so daemon
+## churn stays out.
+-a always,exit -F arch=b64 -F path=/usr/bin/gpasswd -F perm=x -F auid>=1000 -F auid!=unset -k T1136_account
+-a always,exit -F arch=b64 -F path=/usr/bin/chage   -F perm=x -F auid>=1000 -F auid!=unset -k T1098_account
 -w /etc/group   -p wa -k T1087.001_localgroup
 -w /etc/passwd  -p wa -k T1087.001_localuser
 -w /etc/gshadow -k T1087.001_shadow
@@ -256,6 +271,10 @@
 
 # --- DAC / permission modifications (attributable) -------------------------
 -a always,exit -F arch=b64 -S chmod -S fchmod -S fchmodat -F auid>=1000 -F auid!=-1 -k T1222_perm_mod
+## fchmodat2 (kernel 6.6+) is the new routing target for chmod - the -S list
+## above never sees it. Its OWN line, NOT appended to that list (an unknown
+## syscall name would drop the whole perm-mod rule on el6/el7).
+-a always,exit -F arch=b64 -S fchmodat2 -F auid>=1000 -F auid!=-1 -k T1222_perm_mod
 -a always,exit -F arch=b64 -S chown -S fchown -S fchownat -S lchown -F auid>=1000 -F auid!=-1 -k T1222_perm_mod
 -a always,exit -F arch=b64 -S setxattr -S lsetxattr -S fsetxattr -S removexattr -S lremovexattr -S fremovexattr -F auid>=1000 -F auid!=-1 -k T1222_perm_mod
 
@@ -397,6 +416,12 @@
 
 # --- MAC (SELinux) and power state -----------------------------------------
 -w /etc/selinux/ -p wa -k T1562.001_selinux
+## AppArmor is the Ubuntu/Debian MAC - the SELinux watches miss it entirely, so
+## editing a profile or unloading one via apparmor_parser is a whole-distro
+## T1562.001 blind spot without these.
+-w /etc/apparmor    -p wa -k T1562.001_apparmor
+-w /etc/apparmor.d  -p wa -k T1562.001_apparmor
+-a always,exit -F arch=b64 -F path=/sbin/apparmor_parser -F perm=x -k T1562.001_apparmor
 -w /sbin/shutdown -p x -k T1529_power
 -w /sbin/poweroff -p x -k T1529_power
 -w /sbin/reboot   -p x -k T1529_power
@@ -513,6 +538,12 @@
 
 # --- PAM (T1556) -----------------------------------------------------------
 -w /etc/pam.d/ -p wa -k T1556_pam
+## Legacy single-file PAM config - the /etc/pam.d/ directory form is watched
+## above; older/minimal systems still use the monolithic /etc/pam.conf.
+-w /etc/pam.conf -p wa -k T1556_pam
+## nsswitch.conf selects the passwd/group/shadow resolution backend - repointing
+## it is an auth-bypass primitive (T1556). Rare to change.
+-w /etc/nsswitch.conf -p wa -k T1556_nsswitch
 -w /etc/security/limits.conf -p wa -k T1556_pam
 -w /etc/security/limits.d -p wa -k T1556_pam
 -w /etc/security/pam_env.conf -p wa -k T1556_pam

@@ -2,17 +2,17 @@
 # License:      BUSL-1.1
 # Copyright:    (c) 2026 HYPERI PTY LIMITED
 #
+# v3.0      2026-07-20      Route audit BEFORE the general catch-all. Legacy
+#                          rsyslog (<7) evaluates rules top-down for every
+#                          message, so with "*.* -> :12205" first, audit lines
+#                          were forwarded to :12205 as well as :12201 - double
+#                          bandwidth on the el6 floor. UNTESTED here: no matrix
+#                          entry runs rsyslog <7. Verify on a real el6 host.
 # v2.5      2022-11-21      Quotation syntax fix
 # v2.4      2022-11-21      Merged ruleset
 # v2.3      2022-09-28      Old release distro RHEL 5/4 changes
 # v2.2      2022-09-26      Fork for multi distro and legacy/EOLife Linux endpoints
 # v2.1      2022-08-08      HyperI core current version
-
-#
-# Log all events to the central collector
-#
-
-*.*       @@{{ collector_address }}:12205
 
 $ModLoad imfile
 $InputFileName /var/log/audit/audit.log
@@ -21,5 +21,16 @@ $InputFileStateFile audit_log
 $InputFileSeverity info
 $InputRunFileMonitor
 
+#
+# Audit stream FIRST: forward to the dedicated audit port, then stop so these
+# lines never reach the general catch-all below. Order is what routes them -
+# legacy rsyslog processes every message top-down. (The modern template gets
+# the same isolation by binding imfile to a dedicated ruleset instead.)
+#
 if $programname == 'auditd' then @@{{ collector_address }}:12201
 if $programname == 'auditd' then stop
+
+#
+# Everything else -> the general syslog stream.
+#
+*.*       @@{{ collector_address }}:12205

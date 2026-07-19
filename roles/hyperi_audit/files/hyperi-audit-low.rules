@@ -41,6 +41,10 @@
 #
 # Changelog (newest first). Entries below v3.0 were rebuilt from the merge order
 # when the pre-git tracking was retired.
+# v3.3   2026-07-20  Baseline refresh from ACSC/NIST/DISA STIG: AppArmor MAC
+#                    tamper (Ubuntu was a whole-distro blind spot) and nsswitch.
+#                    The hyperi_audit_use_case role variable was renamed
+#                    hyperi_audit_profile_override (it replaces the level).
 # v3.2   2026-07-17  Sigma alignment + baseline refresh. Added the rare,
 #                    high-signal rules that make otherwise-dead SigmaHQ rules
 #                    fireable, plus the Neo23x0 2026-05 socket delta.
@@ -177,6 +181,9 @@
 -w /etc/passwd  -p wa -k T1087.001_localuser
 -w /etc/shadow  -p r -k T1087.001_shadow
 -w /etc/gshadow -k T1087.001_shadow
+## nsswitch.conf selects the passwd/group/shadow resolution backend - repointing
+## it is an auth-bypass primitive (T1556). Rare to change.
+-w /etc/nsswitch.conf -p wa -k T1556_nsswitch
 -w /bin/su -p x -k T1548.003_su
 -w /usr/bin/sudo -p x -k T1548.003_sudo
 -w /usr/bin/pkexec -p x -k T1068_CVE_2021_4034
@@ -266,6 +273,12 @@
 
 # --- MAC (SELinux) and power state -----------------------------------------
 -w /etc/selinux/ -p wa -k T1562.001_selinux
+## AppArmor is the Ubuntu/Debian MAC - the SELinux watches miss it entirely, so
+## editing a profile or unloading one via apparmor_parser is a whole-distro
+## T1562.001 blind spot without these.
+-w /etc/apparmor    -p wa -k T1562.001_apparmor
+-w /etc/apparmor.d  -p wa -k T1562.001_apparmor
+-a always,exit -F arch=b64 -F path=/sbin/apparmor_parser -F perm=x -k T1562.001_apparmor
 -w /sbin/shutdown -p x -k T1529_power
 -w /sbin/reboot   -p x -k T1529_power
 

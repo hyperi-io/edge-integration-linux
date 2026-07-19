@@ -39,7 +39,8 @@ def _deployed_rules(name):
     return got.stdout
 
 
-# (level, use_case) -> the file we expect on disk. A use_case REPLACES the level.
+# (level, profile_override) -> the file we expect on disk. An override REPLACES
+# the level.
 PROFILES = [
     ("low", None),
     ("medium", None),
@@ -49,19 +50,22 @@ PROFILES = [
 
 
 @pytest.mark.parametrize(
-    "level,use_case", PROFILES, ids=lambda v: str(v) if v else "none"
+    "level,profile_override", PROFILES, ids=lambda v: str(v) if v else "none"
 )
-def test_selected_profile_is_deployed(level, use_case, network):
+def test_selected_profile_is_deployed(level, profile_override, network):
     distro = _representative()
-    expected = harness.rules_source(level=level, use_case=use_case).read_text()
+    expected = harness.rules_source(
+        level=level, profile_override=profile_override
+    ).read_text()
 
     try:
         harness.bake(distro)
         name = harness.start_uut(distro)
-        harness.converge(distro, level=level, use_case=use_case)
+        harness.converge(distro, level=level, profile_override=profile_override)
         assert _deployed_rules(name) == expected, (
-            f"level={level} use_case={use_case} deployed the WRONG ruleset "
-            f"(expected {harness.rules_source(level=level, use_case=use_case).name})"
+            f"level={level} profile_override={profile_override} deployed the WRONG "
+            f"ruleset (expected "
+            f"{harness.rules_source(level=level, profile_override=profile_override).name})"
         )
     finally:
         harness.teardown_uut(distro)
@@ -72,9 +76,9 @@ def test_profiles_are_distinguishable():
     rulesets actually differ. If two ever became identical, a selection bug
     between them would pass unnoticed."""
     contents = {
-        p.name: harness.rules_source(level=lvl, use_case=uc).read_text()
-        for lvl, uc in PROFILES
-        for p in [harness.rules_source(level=lvl, use_case=uc)]
+        p.name: harness.rules_source(level=lvl, profile_override=ov).read_text()
+        for lvl, ov in PROFILES
+        for p in [harness.rules_source(level=lvl, profile_override=ov)]
     }
     assert len(set(contents.values())) == len(contents), (
         f"two profiles have identical content, so the selection test cannot "

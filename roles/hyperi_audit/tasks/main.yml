@@ -4,8 +4,11 @@
 # Copyright:    (c) 2026 HYPERI PTY LIMITED
 #
 # v2.6      2026-07-16      Restored the multi-profile ruleset (low / medium /
-#                           high + internet use-case overlay), selected via the
-#                           hyperi_audit_level and hyperi_audit_use_case role variables.
+#                           high + the internet profile), selected via the
+#                           hyperi_audit_level and hyperi_audit_profile_override
+#                           role variables (the latter was hyperi_audit_use_case
+#                           until 2026-07-20 - it REPLACES the level, so the name
+#                           was corrected to match).
 #                           Daemon CPU/concurrency tuning recovered from the
 #                           PaaS collector line: priority_boost 8 -> tiered
 #                           (2 low / 4 medium+high), added flush + freq. Pairs
@@ -44,9 +47,33 @@
       msg: "hyperi_audit_level must be one of low|medium|high (got '{{ hyperi_audit_level }}')"
     when: hyperi_audit_level not in ['low', 'medium', 'high']
 
+  # hyperi_audit_profile_override REPLACES the level-selected ruleset outright -
+  # it does not layer on top of it. Validate it the same way as the level so a
+  # typo fails here, not later at the copy with a confusing "source not found".
+  - name: Fail on an unknown auditd profile override
+    fail:
+      msg: "hyperi_audit_profile_override must be one of low|medium|high|internet (got '{{ hyperi_audit_profile_override }}')"
+    when:
+      - hyperi_audit_profile_override is defined
+      - hyperi_audit_profile_override | length > 0
+      - hyperi_audit_profile_override not in ['low', 'medium', 'high', 'internet']
+
+  # Because the override REPLACES rather than overlays, a non-default level set
+  # alongside an override is silently discarded. Make that visible.
+  - name: Warn that a profile override discards the selected level
+    debug:
+      msg: >-
+        WARNING: hyperi_audit_profile_override={{ hyperi_audit_profile_override }}
+        REPLACES the ruleset - the selected level '{{ hyperi_audit_level }}' is
+        ignored. Unset the override to use the level.
+    when:
+      - hyperi_audit_profile_override is defined
+      - hyperi_audit_profile_override | length > 0
+      - hyperi_audit_level != 'medium'
+
   - name: Log auditd profile selection
     debug:
-      msg: "auditd profile level is {{ hyperi_audit_level }}, use-case overlay is {{ hyperi_audit_use_case | default('none') }}"
+      msg: "auditd profile level is {{ hyperi_audit_level }}, profile override is {{ hyperi_audit_profile_override | default('none') }}"
 
   - name: Populate service facts
     service_facts:
@@ -296,10 +323,10 @@
     set_fact:
       auditd_rules_file: "hyperi-audit-{{ hyperi_audit_level }}.rules"
 
-  - name: Override the rules source file with a use-case overlay when set
+  - name: Replace the rules source file with the profile override when set
     set_fact:
-      auditd_rules_file: "hyperi-audit-{{ hyperi_audit_use_case }}.rules"
-    when: hyperi_audit_use_case is defined and hyperi_audit_use_case | length > 0
+      auditd_rules_file: "hyperi-audit-{{ hyperi_audit_profile_override }}.rules"
+    when: hyperi_audit_profile_override is defined and hyperi_audit_profile_override | length > 0
 
   - name: Copy new auditd rules
     copy:

@@ -97,16 +97,18 @@ and the link to carry.
 | `low` | `hyperi_audit_level=low` | Constrained hosts, slow links | Drops the high-volume syscall auditing (per-connection network, DAC perm-mod, user file deletion, IPC, io_uring/namespace breadth). Backlog 8192, `priority_boost=2` |
 | `medium` | `hyperi_audit_level=medium` (default) | The general fleet | Balanced. Backlog 8192, `priority_boost=4` |
 | `high` | `hyperi_audit_level=high` | High-value hosts that can carry it | `medium` plus interpreter exec, the full setuid/DAC syscall family, IPC, recon toolset, data staging, session/PAM, third-party agents. Backlog 16384, `priority_boost=4` |
-| `internet` | `hyperi_audit_use_case=internet` | Internet-facing edge (web, proxy, bastion) | `medium` minus per-connection network logging, on the assumption the edge NIPS/firewall already carries that telemetry |
+| `internet` | `hyperi_audit_profile_override=internet` | Internet-facing edge (web, proxy, bastion) | `medium` minus per-connection network logging, on the assumption the edge NIPS/firewall already carries that telemetry |
 
 Selection logic, from `tasks/main.yml`:
 
 - `hyperi_audit_level` defaults to `medium`, and the play **fails** on anything
   outside `low|medium|high`.
-- A non-empty `hyperi_audit_use_case` **replaces** the level's rules file
-  outright -- it is not merged. `level=high` with `use_case=internet` deploys the
-  `internet` file, which is `medium`-based. There is no high-based internet
-  variant unless someone writes one.
+- A non-empty `hyperi_audit_profile_override` **replaces** the level's rules file
+  outright -- it is not merged. `level=high` with `profile_override=internet`
+  deploys the `internet` file, which is `medium`-based; there is no high-based
+  internet variant unless someone writes one. The play **fails** on an override
+  outside `low|medium|high|internet`, and **warns** when an override is set
+  alongside a non-default level (the level is discarded).
 - `collector_address` is required; the play fails without it.
 - `hyperi_audit_start_services` (default true) gates the whole service tail.
 
