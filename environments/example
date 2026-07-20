@@ -16,6 +16,7 @@ all:
     "<ip address or DNS name of host 2 here>":
     "<ip address or DNS name of host 3 here>":
   vars:
-    # The collector that receives forwarded audit events (rsyslog omfwd, TCP
-    # 12201). One address for every host in this inventory.
+    # The collector that receives the forwarded streams (rsyslog omfwd): audit
+    # on TCP 12201, general syslog on TCP 12205. One address for every host in
+    # this inventory.
     collector_address: "<ip address or DNS name of the local collector here>"

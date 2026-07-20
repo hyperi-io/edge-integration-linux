@@ -169,6 +169,20 @@ def exec_in(name, script):
     return run(["docker", "exec", name, "sh", "-c", script], check=False)
 
 
+def rsyslog_config_check(name):
+    """Validate the UUT's rsyslog config without starting the daemon.
+
+    `rsyslogd -N1` parses rsyslog.conf plus our drop-in and reports config
+    errors on stderr, exiting non-zero on a fatal problem, WITHOUT launching the
+    daemon. Returns (rc, combined stdout+stderr) so the caller can assert both
+    the exit code and scan the text for "error" - a broken include (e.g. a
+    duplicated drop-in include on a modern EL host) surfaces here, where the
+    marker substring check alone would not.
+    """
+    r = run(["docker", "exec", name, "rsyslogd", "-N1"], check=False)
+    return r.returncode, r.stdout + r.stderr
+
+
 def ensure_audit_log(name):
     run(
         [

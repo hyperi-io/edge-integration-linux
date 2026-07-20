@@ -1,9 +1,2 @@
-# HyperI repo classification. One token: hyperi | product | fork | oss.
-# Declared OSS: a public, openly-licensed project others can use and build on.
-# LICENSE is Apache-2.0; file headers carry the matching SPDX id. Upstream
-# attribution is retained in the ruleset headers (Neo23x0, Apache-2.0; SigmaHQ,
-# DRL 1.1) and in NOTICE.
-#
-# Remaining HUMAN-ONLY action, not yet done: the GitHub repo is still private;
-# making it public is a human action.
+# Declares this repo OSS / Apache-2.0. One token: hyperi | product | fork | oss.
 oss

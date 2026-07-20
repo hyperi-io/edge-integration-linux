@@ -2,7 +2,10 @@
 name = "hyperi-audit-harness"
 version = "0.0.0"
 description = "Docker test harness for the HyperI Linux audit collector role"
-requires-python = ">=3.10"
+# The control node needs python 3.11+ so uv resolves a non-EOL ansible-core
+# (target distros keep their own ansible_python_interpreter). This drops the
+# ansible-core 2.17.x resolution branch that carries CVE-2026-11332.
+requires-python = ">=3.11"
 dependencies = [
     "pytest>=8",
     "ansible-core>=2.16",

@@ -213,12 +213,26 @@
       group: root
       mode: '0755'
 
+  # Does the stock rsyslog.conf already pull in /etc/rsyslog.d? Modern rsyslog
+  # (EL8+, Amazon Linux) does it with the RainerScript object
+  # `include(file="/etc/rsyslog.d/*.conf" ...)`, which lineinfile's exact-string
+  # match cannot see. A blind append would then add a SECOND include, so our
+  # drop-in (imfile + the remote_auditd ruleset) is parsed TWICE and rsyslog
+  # reports the config as errored. Match BOTH the legacy `$IncludeConfig` form
+  # and the modern `include(` form, referencing rsyslog.d either way.
+  - name: Check whether rsyslog.conf already includes the drop-in directory
+    shell: "grep -Eq '(IncludeConfig|include).*rsyslog\\.d' /etc/rsyslog.conf"
+    register: rsyslog_dropin_included
+    changed_when: false
+    failed_when: false
+
   - name: Ensure /etc/rsyslog.d configurations are read irrespective of rsyslog version
     lineinfile:
       path: /etc/rsyslog.conf
       insertafter: EOF
       line: "$IncludeConfig /etc/rsyslog.d/*.conf"
       state: present
+    when: rsyslog_dropin_included.rc != 0
 
   - name: Build 99-hyperi-rsyslog.conf
     template:
@@ -369,32 +383,53 @@
       register: semanage_result_12205
       failed_when: semanage_result_12205.rc != 0 and "already defined" not in semanage_result_12205.stderr
 
-    - name: Create an SELinux build directory
-      ansible.builtin.file:
-        path: /tmp/rsyslog_audit
+    # Build the policy in a per-run, unpredictable, root-only directory rather
+    # than the old fixed /tmp/rsyslog_audit (created 0755). That fixed,
+    # world-readable path was a local symlink/TOCTOU surface: an unprivileged
+    # user could pre-create or race it while we build + semodule -i as root.
+    # tempfile uses mkdtemp, so the name is unpredictable and the directory is
+    # 0700, owned by the creator (root). The module has no `mode` option
+    # because owner-only is its only mode.
+    - name: Create a private SELinux build directory
+      ansible.builtin.tempfile:
         state: directory
-        mode: '0755'
-        owner: root
-        group: root
+        prefix: rsyslog_audit.
+      register: selinux_build_dir
       when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
 
     - name: Copy SELinux rsyslog audit log policy file
       copy:
         src: rsyslog_read_audit_logs.te
-        dest: /tmp/rsyslog_audit/rsyslog_read_audit_logs.te
+        dest: "{{ selinux_build_dir.path }}/rsyslog_read_audit_logs.te"
         owner: root
         group: root
         mode: '0600'
 
+    # policycoreutils-devel installs with failed_when: False above, so its
+    # absence is silent. Without this Makefile the make step below hard-fails
+    # opaquely; assert it here with an actionable message instead.
+    - name: Stat the SELinux policy devel Makefile
+      ansible.builtin.stat:
+        path: /usr/share/selinux/devel/Makefile
+      register: selinux_devel_makefile
+      when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+
+    - name: Fail when the SELinux policy devel tooling is missing
+      ansible.builtin.fail:
+        msg: "SELinux policy devel tooling missing: install policycoreutils-devel for this distro"
+      when:
+        - ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
+        - not selinux_devel_makefile.stat.exists
+
     - name: Make SELinux rsyslog audit log policy
-      shell: 'cd /tmp/rsyslog_audit && make -f /usr/share/selinux/devel/Makefile rsyslog_read_audit_logs.pp'
+      shell: 'cd {{ selinux_build_dir.path }} && make -f /usr/share/selinux/devel/Makefile rsyslog_read_audit_logs.pp'
 
     - name: Install SELinux rsyslog audit log policy
-      shell: 'semodule -i /tmp/rsyslog_audit/rsyslog_read_audit_logs.pp'
+      shell: 'semodule -i {{ selinux_build_dir.path }}/rsyslog_read_audit_logs.pp'
 
     - name: Tidy up an SELinux build directory
       ansible.builtin.file:
-        path: /tmp/rsyslog_audit
+        path: "{{ selinux_build_dir.path }}"
         state: absent
 
     when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled'
@@ -438,7 +473,7 @@
     # rules land at the next reboot.
     #
     # UNVERIFIED, and it must be proven on a real host before fleet rollout
-    # (plan P3): whether "stop auditd" is refused under "-e 2" on the older
+    # (tracked separately): whether "stop auditd" is refused under "-e 2" on the older
     # auditd versions in range. A container cannot answer this -- audit netlink
     # is host-global, so the harness never runs this block at all. If a stop IS
     # refused here, this task fails LOUDLY, which is the intended trade: a

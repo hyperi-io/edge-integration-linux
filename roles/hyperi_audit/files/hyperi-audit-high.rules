@@ -261,7 +261,7 @@
 -w /etc/shadow  -p r -k T1087.001_shadow
 -w /etc/security/opasswd -k T1087.001_opasswd
 -w /usr/bin/ldapsearch -p x -k T1087.002_ldap
--a always,exit -S setresuid -F a0=0 -F exe=/usr/bin/sudo -k T1548.003_sudo
+-a always,exit -F arch=b64 -S setresuid -F a0=0 -F exe=/usr/bin/sudo -k T1548.003_sudo
 -a always,exit -F dir=/home -F uid=0 -F auid>=1000 -F auid!=-1 -C auid!=obj_uid -k T1548.003_power_abuse
 -w /bin/su -p x -k T1548.003_su
 -w /usr/bin/sudo -p x -k T1548.003_sudo

@@ -2,11 +2,10 @@
 #
 # Build the collector-endpoint-linux deployment tarball.
 #
-# Version is derived from the latest git tag. This repo was migrated without
-# its tags, so fall back to a dev version when none exist -- otherwise the
-# artefact name is left dangling (e.g. "...-.tar.gz"). One shared ARTEFACT name
-# drives both the rm and the archive, so the previous artefact is actually
-# removed.
+# Version comes from `git describe`: the newest tag when the repo is tagged,
+# otherwise the short commit SHA -- so every artefact is traceable to a commit
+# rather than a fixed placeholder. One shared ARTEFACT name drives both the rm
+# and the archive, so the previous artefact is actually removed.
 #
 # The archive is built with `git archive`, NOT tar-from-".". That choice is
 # deliberate and worth keeping:
@@ -34,7 +33,10 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-VERSION="$(git tag --sort=version:refname 2>/dev/null | tail -1 || true)"
+# --tags matches lightweight tags too; --always falls back to a short SHA when
+# no tag is reachable yet. The outer fallback covers building from an unpacked
+# source tree that has no .git at all.
+VERSION="$(git describe --tags --always 2>/dev/null || true)"
 if [[ -z "${VERSION}" ]]; then
     VERSION="0.0.0-dev"
 fi

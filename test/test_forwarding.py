@@ -47,10 +47,36 @@ def test_audit_forwarding(distro, receiver):
         # forwarding works: seed a unique marker, assert it reaches the receiver
         harness.ensure_audit_log(name)
         harness.start_rsyslog(name)
+
+        # the rsyslog config must be VALID, not just contain the collector
+        # string: a duplicated drop-in include on a modern EL host makes rsyslog
+        # parse our imfile + remote_auditd ruleset twice, which it reports as an
+        # error - a substring-only marker check would pass straight over it.
+        # rsyslogd -N1 also returns non-zero for BENIGN warnings (e.g. imfile's
+        # "no working directory set"), so key on the actual error signatures,
+        # not the exit code.
+        rc, cfg_check = harness.rsyslog_config_check(name)
+        lowered = cfg_check.lower()
+        problems = ["error", "more than once", "already in this config"]
+        assert not any(p in lowered for p in problems), (
+            f"rsyslogd -N1 reported a config problem (rc={rc}):\n{cfg_check}"
+        )
+
         harness.seed_marker(name, marker)
         assert harness.wait_for_marker(marker), (
             f"marker {marker} did not reach the receiver in time\n"
             f"--- last receiver log ---\n{harness.receiver_log()[-2000:]}"
+        )
+
+        # exactly once: a double-forward (audit lines also hitting the general
+        # catch-all, or a duplicated drop-in include) would deliver it twice.
+        # Read the receiver log once, now that arrival is confirmed.
+        received = harness.receiver_log()
+        count = received.count(marker)
+        assert count == 1, (
+            f"marker {marker} arrived {count} times, expected exactly 1 "
+            f"(a double-forward delivers it more than once)\n"
+            f"--- last receiver log ---\n{received[-2000:]}"
         )
     finally:
         harness.teardown_uut(distro)

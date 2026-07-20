@@ -6,8 +6,10 @@
 #                          rsyslog (<7) evaluates rules top-down for every
 #                          message, so with "*.* -> :12205" first, audit lines
 #                          were forwarded to :12205 as well as :12201 - double
-#                          bandwidth on the el6 floor. UNTESTED here: no matrix
-#                          entry runs rsyslog <7. Verify on a real el6 host.
+#                          bandwidth on the el6 floor. The only matrix entry on
+#                          rsyslog <7 is oraclelinux-6 (amd64-only), so this is
+#                          exercised only on an x64 host - verify there or on a
+#                          real el6 host.
 # v2.5      2022-11-21      Quotation syntax fix
 # v2.4      2022-11-21      Merged ruleset
 # v2.3      2022-09-28      Old release distro RHEL 5/4 changes

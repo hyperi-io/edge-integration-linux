@@ -281,7 +281,7 @@
 ## it is an auth-bypass primitive (T1556). Rare to change.
 -w /etc/nsswitch.conf -p wa -k T1556_nsswitch
 -w /usr/bin/ldapsearch -p x -k T1087.002_ldap
--a always,exit -S setresuid -F a0=0 -F exe=/usr/bin/sudo -k T1548.003_sudo
+-a always,exit -F arch=b64 -S setresuid -F a0=0 -F exe=/usr/bin/sudo -k T1548.003_sudo
 -a always,exit -F dir=/home -F uid=0 -F auid>=1000 -F auid!=-1 -C auid!=obj_uid -k T1548.003_power_abuse
 -w /bin/su -p x -k T1548.003_su
 -w /usr/bin/sudo -p x -k T1548.003_sudo
