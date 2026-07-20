@@ -74,11 +74,11 @@ SELinux is a boundary concern with two halves, applied only when
 |---|---|
 | Packages | `rsyslog` + `audit` (`auditd` on Ubuntu/Debian/SLES); `policycoreutils*` and `libselinux-python` where SELinux is enabled |
 | rsyslog forwarder | `/etc/rsyslog.d/99-hyperi-rsyslog.conf` (0644 root:root) |
-| Drop-in include | `$IncludeConfig /etc/rsyslog.d/*.conf` appended to `/etc/rsyslog.conf`, so the drop-in is read on every rsyslog version |
+| Drop-in include | `$IncludeConfig /etc/rsyslog.d/*.conf` appended to `/etc/rsyslog.conf` **only when** the stock config does not already pull in `/etc/rsyslog.d` (modern rsyslog does, via `include(...)`), so the drop-in is read without adding a duplicate include |
 | Audit ruleset | `/etc/audit/rules.d/hyperi-audit.rules`, or `/etc/audit/audit.rules` when auditd major version is 1 |
 | Displaced distro ruleset | copied aside to `<default rules path>.default` |
 | auditd tuning | the `auditd.conf` discovered under `/etc` (edited line-by-line, not templated over) |
-| SELinux policy | built in `/tmp/rsyslog_audit`, installed via `semodule`, build directory then removed |
+| SELinux policy | built in a per-run temporary directory (0700, root-only), installed via `semodule`, build directory then removed |
 
 The auditd tuning is a fixed set: `name_format=hostname`, `log_group=root`,
 `max_log_file=100`, `num_logs=5`, `max_log_file_action=ROTATE`, `freq=200`,

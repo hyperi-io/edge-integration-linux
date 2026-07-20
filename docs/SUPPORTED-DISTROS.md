@@ -22,11 +22,13 @@ syslog-shaped lines, not native audisp records.
 ## Frozen packages rule
 
 For any distro that is deliberately pinned to a known-old release, the pinned
-packages are **frozen** - never upgrade, dedup, or "fix" them (e.g. the
-`ansible-versioned/` version pins, old crypto). Newer versions do not exist /
-will not install / will not run on those releases; upgrading breaks every
-collector on that distro. "The floor may move" (below) is a separate, deliberate
-decision and does NOT license upgrading the pins of a still-supported distro.
+packages are **frozen** - never upgrade, dedup, or "fix" them (e.g. the pinned
+older ansible for el6-era control nodes in
+[deploying-to-legacy-targets.md](deploying-to-legacy-targets.md), old crypto).
+Newer versions do not exist / will not install / will not run on those releases;
+upgrading breaks every collector on that distro. "The floor may move" (below) is
+a separate, deliberate decision and does NOT license upgrading the pins of a
+still-supported distro.
 
 ## Supported floor
 
@@ -46,7 +48,7 @@ TuxCare** (matrix.yml states that policy directly).
 | Ubuntu 18.04 / 20.04 | EOL bucket, best-effort | `ubuntu:18.04` / `ubuntu:20.04` |
 | Ubuntu 24.04 / 26.04 | Supported (current) | `ubuntu:24.04` / `ubuntu:26.04` |
 | Debian 12 / 13 | Supported (current) | `debian:12` / `debian:13` |
-| Rocky 9 / 10 | Supported (current) | `rockylinux:9` / `rockylinux/rockylinux:10` |
+| Rocky 9 / 10 | Supported (current) | `rockylinux/rockylinux:9` / `rockylinux/rockylinux:10` |
 | AlmaLinux 9 | Supported (current) | `almalinux:9` |
 | Amazon Linux 2023 | Supported (current) | `amazonlinux:2023` |
 | openSUSE Leap 15.6 | Supported (current) | `opensuse/leap:15.6` (needs `python3.11`; the stock `python3` is 3.6, too old for ansible-core) |

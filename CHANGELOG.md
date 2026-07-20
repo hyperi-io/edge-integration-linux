@@ -19,7 +19,7 @@ the merge order when the pre-git tracking was retired.
   `audit.log`, asserts it forwards to the collector on TCP 12201. Nine current
   distros green; the EOL bucket is best-effort. Replaces the VM fleet.
 - Profile-selection tests: the role must deploy the ruleset it was asked for
-  (low/medium/high + the internet overlay), byte-compared against the source.
+  (low/medium/high + the internet profile), byte-compared against the source.
 - GitHub Actions workflow for the harness.
 
 ### Changed
@@ -65,7 +65,7 @@ Host-CPU fix and auditd modernisation. `--backlog_wait_time 0` so the kernel
 drops on backlog overflow instead of throttling syscalls and stalling the host;
 `-i` moved first so directives an older kernel does not know are skipped rather
 than aborting the load; new kernel TTPs (eBPF, namespace escape, io_uring,
-fileless); multi-profile ruleset restored (low/medium/high + internet overlay).
+fileless); multi-profile ruleset restored (low/medium/high + internet profile).
 
 ## [2.9.0] - 2025-01-02
 

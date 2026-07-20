@@ -1,4 +1,13 @@
-# Running an older ansible for older targets
+<!--
+Project:      HyperI Linux audit collector
+File:         docs/deploying-to-legacy-targets.md
+Purpose:      Run the role against el6-era hosts from a modern control node --
+              the pinned older ansible and the old-cipher SSH workaround.
+License:      Apache-2.0
+Copyright:    (c) 2026 HYPERI PTY LIMITED
+-->
+
+# Deploying to legacy targets
 
 Modern ansible-core cannot talk to an el6-era target: it needs a Python on the
 endpoint that those releases do not ship. Pin an older ansible **on the control
@@ -31,9 +40,8 @@ interpreter and then fails at run time with
 `'_AnsiblePathHookFinder' object has no attribute 'find_spec'`. Pinning the
 interpreter avoids it; `uv` downloads that interpreter itself.
 
-These pins are **frozen**. See
-[../docs/SUPPORTED-DISTROS.md](../docs/SUPPORTED-DISTROS.md) - a newer ansible
-does not fix an old target, it just stops reaching it.
+These pins are **frozen**. See [SUPPORTED-DISTROS.md](SUPPORTED-DISTROS.md) - a
+newer ansible does not fix an old target, it just stops reaching it.
 
 ## Old-cipher targets
 

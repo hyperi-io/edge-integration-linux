@@ -30,7 +30,7 @@ privileged disposable VM, tracked separately.
 
     v1.1  2026-07-17  Profile-selection tests (test_profiles.py): the role must
                       deploy the ruleset it was ASKED for (low/medium/high +
-                      the internet overlay), byte-compared against the role's
+                      the internet profile), byte-compared against the role's
                       own source file. Until this, only `medium` was ever
                       converged and the deployed file was only checked for
                       being non-empty.
@@ -61,8 +61,8 @@ into its shared `received.log`, and it stops at the end. Each distro seeds a
 distro-unique marker so its assertion greps only its own lines.
 
 Separately, [`test_profiles.py`](test_profiles.py) asserts the role deploys the
-ruleset it was **asked** for - low/medium/high plus the `internet` use-case
-overlay - by byte-comparing the deployed file against the role's own source. One
+ruleset it was **asked** for - low/medium/high plus the `internet` profile - by
+byte-comparing the deployed file against the role's own source. One
 representative distro: profile selection is ansible-side variable logic and is
 identical on every target.
 
@@ -138,7 +138,7 @@ The per-distro bake pre-installs the slow packages once, so the per-test
 converge is fast config-only. Docker layer cache makes re-bakes near-instant.
 
 **Not wired up:** pushing the bake images to Harbor
-(`harbor.devex.hyperi.io:8443`) and fronting the upstream bases with a
+(`<your-registry>`) and fronting the upstream bases with a
 pull-through cache is a possible future optimisation. CI does neither today -
 there is no Harbor login or cache step in the workflow.
 

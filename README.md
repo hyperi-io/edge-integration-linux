@@ -1,9 +1,14 @@
 # edge-integration-linux
 
-Ansible deployment that turns a Linux endpoint into an audit source for a HyperI
-collector. It installs and configures `auditd` and `rsyslog`, applies a chosen
-audit ruleset, and forwards audit and system events to the collector over TCP -
-across current distros and end-of-life ones alike.
+Ansible deployment that turns a Linux endpoint into an audit source for a central
+syslog receiver. It installs and configures `auditd` and `rsyslog`, applies a
+chosen audit ruleset, and forwards audit and system events to the receiver over
+TCP - across current distros and end-of-life ones alike.
+
+The receiver is any syslog daemon that accepts forwarded TCP syslog - HyperI's is
+the [Edge Stream Hub](https://hyperi.io), but rsyslog, syslog-ng or any
+equivalent works. The role assumes nothing about it beyond a reachable
+`collector_address`.
 
 Two names are in play and they genuinely differ: this repository is
 `edge-integration-linux`, and the deployment artefact it builds is
@@ -52,7 +57,7 @@ flowchart LR
   A[auditd] -->|writes| B["/var/log/audit/audit.log"]
   B -->|imfile| C[rsyslog]
   D[system logs] --> C
-  C -->|omfwd TCP 12201| E[HyperI collector]
+  C -->|omfwd TCP 12201| E["Syslog receiver<br/>(HyperI Edge Stream Hub)"]
   C -->|omfwd TCP 12205| E
 ```
 
@@ -147,7 +152,7 @@ Python predates what current `ansible-core` will drive, so deploying to them
 needs a pinned, older ansible on the machine you deploy from. A python or
 library version error on an old target is almost always this, and an old
 endpoint may also refuse a modern SSH key exchange. Both have one-line answers
-in [ansible-versioned/README.md](./ansible-versioned/README.md).
+in [docs/deploying-to-legacy-targets.md](./docs/deploying-to-legacy-targets.md).
 
 ## Testing
 
@@ -171,7 +176,7 @@ https://keepachangelog.com
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - how the pieces fit together
 - [ADR 0001](./docs/decisions/0001-auditd-to-file-to-rsyslog-not-audisp.md) - why `auditd -> file -> rsyslog`, not audisp
 - [docs/SUPPORTED-DISTROS.md](./docs/SUPPORTED-DISTROS.md) - the distro range and why EOL releases are in it
-- [ansible-versioned/README.md](./ansible-versioned/README.md) - deploying to old targets from a modern control node
+- [docs/deploying-to-legacy-targets.md](./docs/deploying-to-legacy-targets.md) - deploying to old targets from a modern control node
 - [test/README.md](./test/README.md) - the test harness
 - [CHANGELOG.md](./CHANGELOG.md)
 - [LICENSE](./LICENSE) - Apache License 2.0
