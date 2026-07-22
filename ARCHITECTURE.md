@@ -23,30 +23,22 @@ Audit records and general syslog both leave the host through rsyslog, but on
 **different collector ports**: audit on **TCP 12201**, everything else on **TCP
 12205**. One daemon, one config file, two destinations.
 
-```mermaid
-flowchart LR
-  kernel([Kernel audit subsystem])
-  subgraph endpoint["Endpoint"]
-    direction LR
-    auditd["auditd daemon"]
-    auditlog[(/var/log/audit/audit.log)]
-    subgraph rsyslog["rsyslog -- SELinux syslogd_t"]
-      direction LR
-      imfile["imfile input"]
-      rsaudit["ruleset remote_auditd"]
-      rsdefault["default ruleset"]
-    end
-    sources["Local syslog sources"]
-  end
-  collector([Central collector])
-
-  kernel -->|emits records| auditd
-  auditd -->|writes| auditlog
-  auditlog -->|tails| imfile
-  imfile -->|tags auditd| rsaudit
-  sources -->|logs| rsdefault
-  rsaudit -->|omfwd TCP 12201| collector
-  rsdefault -->|omfwd TCP 12205| collector
+```text
+  Kernel audit subsystem
+    |  emits records
+    v
+  auditd daemon
+    |  writes
+    v
+  /var/log/audit/audit.log
+    |  rsyslog imfile tails (tags "auditd")
+    v
+  rsyslog (SELinux syslogd_t)                 local syslog sources
+    |                                              |
+    | ruleset remote_auditd                        | default ruleset
+    v                                              v
+  omfwd TCP 12201 --> Central collector <-- omfwd TCP 12205
+    (audit stream)                            (everything else)
 ```
 
 The template is chosen from the rsyslogd major version probed on the endpoint.
@@ -57,6 +49,12 @@ own `remote_auditd` ruleset. Below 7 the role swaps in the legacy template,
 which is pre-RainerScript: `$ModLoad imfile`, plain `@@host:port` forwarding
 with no queue or retry options, and a `$programname == 'auditd'` check plus
 `stop` in place of the dedicated ruleset.
+
+The transport shown here (plain TCP `omfwd`) is the default. `hyperi_audit_transport`
+can instead wrap the same two forwards in TLS (`omfwd` + the `gtls` driver) or
+switch them to RELP (`omrelp`, plain or over TLS); the modern template carries the
+alternatives. The transport options and their trust models are in
+[docs/transport.md](./docs/transport.md).
 
 SELinux is a boundary concern with two halves, applied only when
 `ansible_selinux.status == 'enabled'`:
@@ -117,23 +115,21 @@ Selection logic, from `tasks/main.yml`:
 Facts and probes come first, because almost everything after them is gated on a
 version discovered on the endpoint rather than assumed from the distro name.
 
-```mermaid
-sequenceDiagram
-    participant C as Control node
-    participant E as Endpoint
-    C->>E: gather distribution and service facts
-    C->>C: default and validate hyperi_audit_level
-    C->>E: install rsyslog, audit (retry until success)
-    C->>E: install SELinux tooling (when enforcing)
-    C->>E: probe rsyslogd version, init type, auditd version and state
-    E-->>C: rsyslog major, init type, auditd version, immutable state
-    C->>E: write rsyslog drop-in (legacy template when rsyslog < 7)
-    C->>E: tune auditd.conf (version-gated log_format, flush)
-    C->>E: back up the distro ruleset, copy the selected profile
-    C->>E: relax RefuseManualStop (systemd hosts)
-    C->>E: semanage ports, build and install the SELinux module
-    C->>E: stop services, restore RefuseManualStop, start services
-    Note over C,E: the service tail is skipped when hyperi_audit_start_services=false
+```text
+  Control node                            Endpoint
+  ------------                            --------
+  gather facts -------------------------> distribution + service facts
+  default / validate level  (local)
+  install rsyslog, audit ---------------> retry until success
+  install SELinux tooling --------------> when enforcing
+  probe versions -----------------------> rsyslogd, init type, auditd, immutable
+                     <------------------- results returned
+  write rsyslog drop-in ----------------> legacy template when rsyslog < 7
+  tune auditd.conf ---------------------> version-gated log_format, flush
+  back up ruleset, copy profile --------> selected profile lands
+  relax RefuseManualStop ---------------> systemd hosts
+  semanage ports, build SELinux module -> installed via semodule
+  stop / restore / start services ------> skipped when start_services=false
 ```
 
 Version gating lives in two places and nowhere else: `log_format` is `ENRICHED`

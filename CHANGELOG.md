@@ -14,6 +14,15 @@ the merge order when the pre-git tracking was retired.
 
 ### Added
 
+- Optional transport (`hyperi_audit_transport`, default `tcp`): plain TCP stays
+  the default and works with every receiver. `relp` adds reliable, acknowledged
+  delivery (`omrelp`) to any RELP receiver; `syslog-tls` wraps the forwards in TLS
+  (`omfwd` + the gtls driver); `relp-tls` does both. TLS trust is
+  `hyperi_audit_tls_mode` (`anon`/`server`/`mutual`) plus CA/cert/key and
+  overridable ports. Plain RELP is tested end to end against a stock `imrelp`
+  receiver; the TLS transports are config-validity tested per packaging family.
+  HyperI's own receivers gain RELP ingest in a future release (#2; dfe-receiver
+  #44) - RELP reaches any standard RELP receiver today. See `docs/transport.md`.
 - Docker test harness (`test/`): one persistent rsyslog receiver plus disposable
   per-distro containers. Converges the role config-only, seeds a marker into
   `audit.log`, asserts it forwards to the collector on TCP 12201. Nine current

@@ -11,18 +11,17 @@ Copyright:    (c) 2026 HYPERI PTY LIMITED
 
 Read this before deploying to anything you care about. The role is small and
 does one job well, but it makes deliberate trade-offs that an operator must
-understand and, in one case, must compensate for. The headline: **the audit
-stream leaves the host in cleartext**, and the role does nothing to encrypt it.
-Everything else on this page is secondary to that.
+understand and, in one case, must compensate for. The headline: **by default the
+audit stream leaves the host in cleartext**. The role ships an opt-in encrypted
+transport, but it is off unless you turn it on. Everything else on this page is
+secondary to that.
 
-## Transport is plaintext TCP -- there is no encryption
+## Transport is plaintext by default -- encryption is opt-in
 
-The rsyslog forwarder sends both streams with the `omfwd` action over plain TCP:
-audit records to `collector_address` on **TCP 12201**, general syslog on **TCP
-12205**. Neither template sets a TLS driver -- there is no `gtls`, no `ossl`, no
-`StreamDriver`, no RELP anywhere in the role. The legacy (rsyslog < 7) template
-is the same, forwarding with `@@host:port`. The stream is therefore **cleartext
-on the wire**.
+By default the rsyslog forwarder sends both streams with the `omfwd` action over
+plain TCP: audit records to `collector_address` on **TCP 12201**, general syslog
+on **TCP 12205**. The legacy (rsyslog < 7) template does the same with
+`@@host:port`. On the default the stream is **cleartext on the wire**.
 
 That matters because of *what* is on the wire. Audit records carry the commands
 users ran, the files they touched, and authentication and privilege-escalation
@@ -30,24 +29,27 @@ events -- exactly the material an attacker who can sniff the link would want.
 Sending it unencrypted across an untrusted network exposes it to interception
 and to tampering in transit.
 
-> **Warning:** This role does **not** set up encryption. On any link you do not
-> fully trust -- anything crossing a data-centre boundary, a shared segment, or
-> the public internet -- put a TLS tunnel between the endpoint and the receiver
-> yourself. Options: `stunnel`, or rsyslog's own TLS (`gtls`/`ossl`) or RELP
-> transport. Tellingly, the rulesets themselves watch `stunnel` execution as a
-> covered-channel technique (MITRE ATT&CK **T1573.002**) -- the product already
-> assumes tunnels exist in the environment; it just does not build one for you.
+The role now offers a built-in encrypted transport: set
+`hyperi_audit_transport: syslog-tls` and the same streams travel over TLS
+(`omfwd` + the `gtls` driver). `relp-tls` adds reliable delivery on top of the
+encryption. The full setup -- transports, trust modes and which one suits which
+receiver -- is in [transport](transport.md).
+
+> **Warning:** encryption is **off by default**. On any link you do not fully
+> trust -- anything crossing a data-centre boundary, a shared segment, or the
+> public internet -- either turn on the built-in `syslog-tls` transport
+> ([transport](transport.md)) or put a TLS tunnel
+> (`stunnel`) between the endpoint and the receiver yourself. Tellingly, the
+> rulesets themselves watch `stunnel` execution as a covered-channel technique
+> (MITRE ATT&CK **T1573.002**) -- the product already assumes tunnels exist in
+> the environment.
 
 ```mermaid
 flowchart LR
   ep["Endpoint<br/>auditd + rsyslog omfwd"]
   collector([Collector])
-  ep -->|DEFAULT: cleartext TCP 12201 and 12205| collector
-  ep -.->|on an untrusted link, wrap it| tun
-  subgraph tunnel["TLS tunnel -- NOT shipped by this role"]
-    tun["stunnel / rsyslog TLS / RELP"]
-  end
-  tun -.->|encrypted| collector
+  ep -->|DEFAULT - cleartext TCP 12201 and 12205| collector
+  ep -.->|opt-in - hyperi_audit_transport=syslog-tls| collector
 ```
 
 ## The role takes over host auditing -- existing rules are displaced
@@ -120,9 +122,10 @@ fan-out; do not deploy to crown-jewel hosts first.
   [deploying to legacy targets](deploying-to-legacy-targets.md).
 - **Outbound only -- no inbound ports opened.** The role forwards *out* to the
   collector; it does **not** open a listening port on the endpoint. Where SELinux
-  is enforcing it adds `syslogd_port_t` bindings for TCP 12201 and 12205, which
-  permit rsyslog to *connect out* on those ports -- not to accept connections.
-  The endpoint's attack surface does not grow by a listener.
+  is enforcing it adds `syslogd_port_t` bindings for the configured collector
+  ports (TCP 12201 and 12205 by default, or the TLS ports you set), which permit
+  rsyslog to *connect out* on those ports -- not to accept connections. The
+  endpoint's attack surface does not grow by a listener.
 
 ## Profile choice is a security-versus-volume trade-off
 

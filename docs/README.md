@@ -41,6 +41,9 @@ Audit records leave on TCP 12201, everything else on TCP 12205.
   many hosts once one host works.
 - [Configuration](configuration.md) -- the complete role-variable reference, the
   audit profiles, and the `auditd.conf` tuning the role applies.
+- [Transport](transport.md) -- the opt-ins beyond the plaintext default: `relp`
+  for reliable delivery, `syslog-tls` for encryption, `relp-tls` for both, and
+  the TLS trust model to pick per receiver.
 - [Supported distributions](SUPPORTED-DISTROS.md) -- the distro range and why
   end-of-life releases are in scope.
 - [Deploying to legacy targets](deploying-to-legacy-targets.md) -- reaching

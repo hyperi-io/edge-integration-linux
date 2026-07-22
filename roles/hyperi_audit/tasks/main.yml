@@ -75,6 +75,73 @@
     debug:
       msg: "auditd profile level is {{ hyperi_audit_level }}, profile override is {{ hyperi_audit_profile_override | default('none') }}"
 
+  # Transport selection. Default stays plain TCP so existing inventories that set
+  # only collector_address keep working unchanged. syslog-tls and relp-tls are
+  # opt-in encrypted transports; the trust model is hyperi_audit_tls_mode.
+  - name: Set transport default (plain tcp)
+    ansible.builtin.set_fact:
+      hyperi_audit_transport: "tcp"
+    when: hyperi_audit_transport is undefined
+
+  - name: Fail on an unknown transport
+    ansible.builtin.fail:
+      msg: "hyperi_audit_transport must be one of tcp|syslog-tls|relp|relp-tls (got '{{ hyperi_audit_transport }}')"
+    when: hyperi_audit_transport not in ['tcp', 'syslog-tls', 'relp', 'relp-tls']
+
+  - name: Set TLS trust mode default (anon)
+    ansible.builtin.set_fact:
+      hyperi_audit_tls_mode: "anon"
+    when: hyperi_audit_tls_mode is undefined
+
+  - name: Fail on an unknown TLS trust mode
+    ansible.builtin.fail:
+      msg: "hyperi_audit_tls_mode must be one of anon|server|mutual (got '{{ hyperi_audit_tls_mode }}')"
+    when:
+      - hyperi_audit_transport in ['syslog-tls', 'relp-tls']
+      - hyperi_audit_tls_mode not in ['anon', 'server', 'mutual']
+
+  # librelp always negotiates mutual TLS for any authenticated mode - there is no
+  # one-way (server-only) RELP. So relp-tls is anon or mutual, never server.
+  - name: Fail on relp-tls with server (one-way) trust
+    ansible.builtin.fail:
+      msg: "relp-tls does not support tls_mode=server (librelp forces mutual auth) - use anon or mutual"
+    when:
+      - hyperi_audit_transport == 'relp-tls'
+      - hyperi_audit_tls_mode == 'server'
+
+  - name: Require a CA / trust anchor for server and mutual trust
+    ansible.builtin.fail:
+      msg: "hyperi_audit_tls_ca_file must be set for tls_mode={{ hyperi_audit_tls_mode }}"
+    when:
+      - hyperi_audit_transport in ['syslog-tls', 'relp-tls']
+      - hyperi_audit_tls_mode in ['server', 'mutual']
+      - (hyperi_audit_tls_ca_file | default('')) | length == 0
+
+  - name: Require a client cert + key for mutual trust
+    ansible.builtin.fail:
+      msg: "hyperi_audit_tls_client_cert and hyperi_audit_tls_client_key must both be set for tls_mode=mutual"
+    when:
+      - hyperi_audit_transport in ['syslog-tls', 'relp-tls']
+      - hyperi_audit_tls_mode == 'mutual'
+      - ((hyperi_audit_tls_client_cert | default('')) | length == 0) or ((hyperi_audit_tls_client_key | default('')) | length == 0)
+
+  - name: Set audit forward port default
+    ansible.builtin.set_fact:
+      hyperi_audit_port_audit: "12201"
+    when: hyperi_audit_port_audit is undefined
+
+  - name: Set syslog forward port default
+    ansible.builtin.set_fact:
+      hyperi_audit_port_syslog: "12205"
+    when: hyperi_audit_port_syslog is undefined
+
+  - name: Log transport selection
+    debug:
+      msg: >-
+        Transport is {{ hyperi_audit_transport }}
+        {%- if hyperi_audit_transport in ['syslog-tls', 'relp-tls'] %} (TLS trust: {{ hyperi_audit_tls_mode }}){% endif %};
+        audit -> {{ hyperi_audit_port_audit }}, syslog -> {{ hyperi_audit_port_syslog }}
+
   - name: Populate service facts
     service_facts:
 
@@ -97,6 +164,31 @@
     retries: 6
     delay: 10
     until: install_res is success
+
+  # syslog-over-TLS needs the GnuTLS netstream driver, shipped separately from
+  # the rsyslog base on every supported distro (package name is the same across
+  # EL and Debian/Ubuntu).
+  - name: Install the rsyslog GnuTLS driver for syslog-over-TLS
+    ansible.builtin.package:
+      name: rsyslog-gnutls
+      state: latest
+    register: gnutls_install_res
+    retries: 6
+    delay: 10
+    until: gnutls_install_res is success
+    when: hyperi_audit_transport == 'syslog-tls'
+
+  # RELP transport (encrypted or not) needs the omrelp module + librelp (the
+  # rsyslog-relp package).
+  - name: Install the rsyslog RELP module for RELP transport
+    ansible.builtin.package:
+      name: rsyslog-relp
+      state: latest
+    register: relp_install_res
+    retries: 6
+    delay: 10
+    until: relp_install_res is success
+    when: hyperi_audit_transport in ['relp', 'relp-tls']
 
   - name: Install SELinux dependencies
     block:
@@ -204,6 +296,19 @@
   - name: Set rsyslogd legacy flag on/off
     set_fact:
       rsyslog_legacy: "{{ '-legacy' if rsyslogd_major_version < '7' else '' }}"
+
+  # RELP on the rsyslog <7 floor is not offered: librelp there is too old or
+  # absent to rely on. Fail loudly with the alternative rather than emit a
+  # legacy template that silently drops the RELP request back to plain TCP.
+  - name: Fail on RELP against the legacy rsyslog floor
+    ansible.builtin.fail:
+      msg: >-
+        relp / relp-tls need modern rsyslog + librelp, but this host runs rsyslog
+        {{ rsyslogd_major_version }} (<7). Use hyperi_audit_transport=syslog-tls
+        or tcp on the legacy floor.
+    when:
+      - hyperi_audit_transport in ['relp', 'relp-tls']
+      - rsyslog_legacy == '-legacy'
 
   - name: Ensure /etc/rsyslog.d exists
     file:
@@ -373,15 +478,14 @@
   - name: Configure SELinux
     block:
 
-    - name: SELinux allow rsyslog to send to TCP/12201
-      shell: 'semanage port -a -t syslogd_port_t -p tcp 12201'
-      register: semanage_result
-      failed_when: semanage_result.rc != 0 and "already defined" not in semanage_result.stderr
-
-    - name: SELinux allow rsyslog to send to TCP/12205
-      shell: 'semanage port -a -t syslogd_port_t -p tcp 12205'
-      register: semanage_result_12205
-      failed_when: semanage_result_12205.rc != 0 and "already defined" not in semanage_result_12205.stderr
+    # Permit egress to the configured collector ports, whatever they are set to -
+    # the defaults (12201/12205) or the TLS ports an operator points the transport
+    # at (e.g. 6514). unique collapses the loop when both streams share a port.
+    - name: SELinux allow rsyslog to send to the collector ports
+      shell: 'semanage port -a -t syslogd_port_t -p tcp {{ item }}'
+      register: semanage_ports
+      failed_when: semanage_ports.rc != 0 and "already defined" not in semanage_ports.stderr
+      loop: "{{ [hyperi_audit_port_audit, hyperi_audit_port_syslog] | unique }}"
 
     # Build the policy in a per-run, unpredictable, root-only directory rather
     # than the old fixed /tmp/rsyslog_audit (created 0755). That fixed,

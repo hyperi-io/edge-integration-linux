@@ -20,3 +20,39 @@ all:
     # on TCP 12201, general syslog on TCP 12205. One address for every host in
     # this inventory.
     collector_address: "<ip address or DNS name of the local collector here>"
+
+    # --- Transport (optional) -------------------------------------------------
+    # How the streams leave the endpoint. Default is plain TCP (unchanged), so
+    # leaving all of the below unset keeps the existing behaviour.
+    #   tcp        - plaintext TCP. Pair with a network tunnel if the path is
+    #                untrusted.
+    #   relp       - RELP: reliable, acknowledged delivery to any RELP receiver.
+    #                Not encrypted - use relp-tls for that.
+    #   syslog-tls - syslog over TLS. The recommended encrypted transport; the
+    #                Edge Stream Hub and dfe-receiver both accept it.
+    #   relp-tls   - RELP over TLS: reliable AND encrypted.
+    # RELP reaches any standard RELP receiver today; HyperI's own receivers gain
+    # RELP ingest in a future release (see docs/transport.md).
+    # hyperi_audit_transport: "syslog-tls"
+
+    # TLS trust model - only used by syslog-tls / relp-tls.
+    #   anon   - encryption only, no certificates (deploy-and-go). Does NOT
+    #            authenticate the receiver, so use it only over a trusted or VPN
+    #            path. It also needs anonymous ciphers, which hardened hosts
+    #            (RHEL8+/OpenSSL3) disable - move to server/mutual there. For
+    #            relp-tls, anon is the only certificate-free option (librelp
+    #            forces mutual for any authenticated mode).
+    #   server - validate the receiver's certificate; no client cert on the
+    #            endpoint. syslog-tls only (not relp-tls). Needs the CA below.
+    #   mutual - mutual TLS with a client certificate. Needs the CA, client cert
+    #            and client key below.
+    # hyperi_audit_tls_mode: "anon"
+    # hyperi_audit_tls_ca_file: "/etc/pki/hyperi/ca.pem"
+    # hyperi_audit_tls_permitted_peer: "collector.example.com"
+    # hyperi_audit_tls_client_cert: "/etc/pki/hyperi/client.pem"
+    # hyperi_audit_tls_client_key: "/etc/pki/hyperi/client.key"
+
+    # Forwarding ports (defaults shown). For TLS, point these at the receiver's
+    # TLS listeners (for example 6514 for syslog-tls).
+    # hyperi_audit_port_audit: "12201"
+    # hyperi_audit_port_syslog: "12205"

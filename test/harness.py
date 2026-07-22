@@ -135,8 +135,12 @@ def rules_source(level=None, profile_override=None):
     return ROLE_FILES / f"hyperi-audit-{stem}.rules"
 
 
-def converge(distro, level="medium", profile_override=None):
-    """Apply the role in config-only mode over the community.docker connection."""
+def converge(distro, level="medium", profile_override=None, extra_vars=None):
+    """Apply the role in config-only mode over the community.docker connection.
+
+    extra_vars is an optional dict of additional `-e key=value` pairs - the
+    transport tests use it to select syslog-tls and pass the TLS trust settings.
+    """
     name = uut_name(distro)
     cmd = [
         "ansible-playbook",
@@ -158,6 +162,8 @@ def converge(distro, level="medium", profile_override=None):
     # treats an empty/undefined value as "no override", so only pass it when asked.
     if profile_override:
         cmd += ["-e", f"hyperi_audit_profile_override={profile_override}"]
+    for key, value in (extra_vars or {}).items():
+        cmd += ["-e", f"{key}={value}"]
     # Some distros ship a too-old default python3 for modern ansible-core
     # (e.g. openSUSE Leap 15.6 -> 3.6); pin a newer interpreter when set.
     if distro.get("python"):

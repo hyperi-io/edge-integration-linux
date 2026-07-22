@@ -52,13 +52,17 @@ and stable on every target, and the collector is a syslog receiver that consumes
 syslog-shaped lines. Full reasoning:
 [ADR 0001](./docs/decisions/0001-auditd-to-file-to-rsyslog-not-audisp.md).
 
-```mermaid
-flowchart LR
-  A[auditd] -->|writes| B["/var/log/audit/audit.log"]
-  B -->|imfile| C[rsyslog]
-  D[system logs] --> C
-  C -->|omfwd TCP 12201| E["Syslog receiver<br/>(HyperI Edge Stream Hub)"]
-  C -->|omfwd TCP 12205| E
+```text
+  auditd
+    |  writes
+    v
+  /var/log/audit/audit.log
+    |  rsyslog imfile tails
+    v
+  rsyslog  <--- local system log sources
+    |
+    +-- omfwd TCP 12201 (audit)  --> Syslog receiver (HyperI Edge Stream Hub)
+    +-- omfwd TCP 12205 (syslog) --> Syslog receiver (HyperI Edge Stream Hub)
 ```
 
 Audit records go to TCP 12201, everything else to TCP 12205.
@@ -93,7 +97,15 @@ Role variables, set in your inventory's `vars:` block or via `--extra-vars`.
 | `collector_address` | none - **required** | IP or DNS name of the collector receiving forwarded events. The run fails immediately if unset. |
 | `hyperi_audit_level` | `medium` | Audit profile: `low`, `medium` or `high`. Any other value fails the run. |
 | `hyperi_audit_profile_override` | unset | Replaces the level's ruleset with a named use-case profile; `internet` is the one shipped. An unknown value fails the run. Formerly `hyperi_audit_use_case`. |
+| `hyperi_audit_transport` | `tcp` | Transport: `tcp` (plain syslog, the default, works everywhere), `relp` (reliable), `syslog-tls` (encrypted) or `relp-tls` (both). The opt-ins and their trust models are in [docs/transport.md](./docs/transport.md). |
 | `hyperi_audit_start_services` | `true` | `false` writes the configuration but does not enable, stop or start `auditd` and `rsyslog`. Used by the test harness to converge inside a container that has no init. |
+
+The transport is **plaintext by default**. Two opt-ins sit on top: `relp` adds
+reliable, acknowledged delivery (to any RELP receiver) and `syslog-tls` adds
+encryption; `relp-tls` does both - see [docs/transport.md](./docs/transport.md).
+HyperI's own receivers gain RELP ingest in a future release
+([#2](https://github.com/hyperi-io/edge-integration-linux/issues/2)); RELP
+reaches any standard RELP receiver today.
 
 ## Deploying
 

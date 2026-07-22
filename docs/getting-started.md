@@ -41,7 +41,7 @@ Nothing is installed on the endpoint beyond its own distro's `rsyslog` and
 > **Note:** the oldest supported endpoints constrain the control node too --
 > their Python can be too old for current `ansible-core`. If you are targeting an
 > end-of-life release, read [supported distributions](SUPPORTED-DISTROS.md) and
-> [ansible-versioned/README.md](../ansible-versioned/README.md) first.
+> [deploying to legacy targets](deploying-to-legacy-targets.md) first.
 
 ## 2. Write a one-host inventory
 

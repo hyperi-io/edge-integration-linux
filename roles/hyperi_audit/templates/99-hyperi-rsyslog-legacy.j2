@@ -2,6 +2,16 @@
 # License:      Apache-2.0
 # Copyright:    (c) 2026 HYPERI PTY LIMITED
 #
+# v3.1      2026-07-22      Optional encrypted transport for the legacy floor.
+#                          hyperi_audit_transport selects plain TCP (default,
+#                          unchanged) or syslog-over-TLS via the old-style gtls
+#                          stream-driver directives ($DefaultNetstreamDriver etc).
+#                          RELP is NOT offered here - librelp on the rsyslog <7
+#                          floor is too old/absent; the role fails relp-tls before
+#                          this template and points at syslog-tls or tcp. Trust is
+#                          hyperi_audit_tls_mode: anon (encryption only), server
+#                          (validate the receiver cert, no client cert) or mutual
+#                          (client cert).
 # v3.0      2026-07-20      Route audit BEFORE the general catch-all. Legacy
 #                          rsyslog (<7) evaluates rules top-down for every
 #                          message, so with "*.* -> :12205" first, audit lines
@@ -13,8 +23,33 @@
 # v2.5      2022-11-21      Quotation syntax fix
 # v2.4      2022-11-21      Merged ruleset
 # v2.3      2022-09-28      Old release distro RHEL 5/4 changes
-# v2.2      2022-09-26      Fork for multi distro and legacy/EOLife Linux endpoints
+# v2.2      2022-09-26      Fork for multi distro and legacy/EOLife endpoints
 # v2.1      2022-08-08      HyperI core current version
+{% set transport = hyperi_audit_transport | default('tcp') %}
+{% set mode = hyperi_audit_tls_mode | default('anon') %}
+{% set ca = hyperi_audit_tls_ca_file | default('') %}
+{% set cert = hyperi_audit_tls_client_cert | default('') %}
+{% set key = hyperi_audit_tls_client_key | default('') %}
+{% set peer = hyperi_audit_tls_permitted_peer | default('') %}
+{% if transport == 'syslog-tls' %}
+#
+# syslog-over-TLS via the legacy gtls stream driver. These global directives
+# switch the "@@" TCP forwards below into TLS; the ports are unchanged.
+#
+$DefaultNetstreamDriver gtls
+{% if ca | length > 0 %}
+$DefaultNetstreamDriverCAFile {{ ca }}
+{% endif %}
+{% if mode == 'mutual' %}
+$DefaultNetstreamDriverCertFile {{ cert }}
+$DefaultNetstreamDriverKeyFile {{ key }}
+{% endif %}
+$ActionSendStreamDriverMode 1
+$ActionSendStreamDriverAuthMode {{ 'anon' if mode == 'anon' else ('x509/name' if peer | length > 0 else 'x509/certvalid') }}
+{% if mode != 'anon' and peer | length > 0 %}
+$ActionSendStreamDriverPermittedPeer {{ peer }}
+{% endif %}
+{% endif %}
 
 $ModLoad imfile
 $InputFileName /var/log/audit/audit.log
@@ -29,10 +64,10 @@ $InputRunFileMonitor
 # legacy rsyslog processes every message top-down. (The modern template gets
 # the same isolation by binding imfile to a dedicated ruleset instead.)
 #
-if $programname == 'auditd' then @@{{ collector_address }}:12201
+if $programname == 'auditd' then @@{{ collector_address }}:{{ hyperi_audit_port_audit | default('12201') }}
 if $programname == 'auditd' then stop
 
 #
 # Everything else -> the general syslog stream.
 #
-*.*       @@{{ collector_address }}:12205
+*.*       @@{{ collector_address }}:{{ hyperi_audit_port_syslog | default('12205') }}

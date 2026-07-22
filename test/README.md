@@ -28,6 +28,17 @@ privileged disposable VM, tracked separately.
 
 ### Harness changelog
 
+    v1.3  2026-07-22  Plain RELP end to end (test_relp_forwarding.py): the
+                      receiver gained an imrelp listener (20514), so
+                      hyperi_audit_transport=relp is proven wire-to-wire - the
+                      omrelp handshake, transfer and delivery - against a stock
+                      RELP receiver, one distro per family.
+    v1.2  2026-07-22  Encrypted-transport config validity (test_tls_forwarding.py):
+                      with hyperi_audit_transport=syslog-tls / relp-tls the role
+                      installs the matching driver (rsyslog-gnutls / rsyslog-relp)
+                      and rsyslogd -N1 accepts the generated omfwd+gtls / omrelp
+                      action, proven on one distro per family. The TLS handshake
+                      over the wire is NOT exercised (see below).
     v1.1  2026-07-17  Profile-selection tests (test_profiles.py): the role must
                       deploy the ruleset it was ASKED for (low/medium/high +
                       the internet profile), byte-compared against the role's
@@ -66,6 +77,22 @@ byte-comparing the deployed file against the role's own source. One
 representative distro: profile selection is ansible-side variable logic and is
 identical on every target.
 
+Also separately, [`test_tls_forwarding.py`](test_tls_forwarding.py) proves the
+TLS-transport machinery for both TLS transports: with
+`hyperi_audit_transport: syslog-tls` the role installs `rsyslog-gnutls` and
+`rsyslogd -N1` loads the gtls driver and accepts the `omfwd` + `gtls` action;
+with `relp-tls` it installs `rsyslog-relp` and -N1 loads the omrelp module and
+accepts the `omrelp` action. Run on one distro per packaging family (deb + el)
+where the drivers are in the standard repos. It proves the config is valid and
+the driver present, not the wire handshake - see below.
+
+[`test_relp_forwarding.py`](test_relp_forwarding.py) goes the whole way for
+**plain RELP**: the receiver runs a stock `imrelp` listener, so
+`hyperi_audit_transport: relp` is proven wire-to-wire - the omrelp handshake, the
+transfer and delivery into the shared `received.log`. Plain RELP needs no certs
+and no anon ciphers, and it forwards to any RELP receiver, so unlike the TLS
+transports there is nothing blocking a real end-to-end run.
+
 ## What it deliberately does NOT test
 
 Read this before trusting a green run. The gaps are real, and one of them hid a
@@ -89,6 +116,19 @@ real kernel event. Consequences worth naming:
   "restart skipped on every deploy after the first" bug lived.
 - **auditd itself is never started**, so nothing proves `auditd.conf` is even
   parseable by the daemon, let alone that an unknown keyword is not fatal.
+
+**The TLS wire handshake.** Plain RELP is proven end to end (above), but the
+**TLS** transports (`syslog-tls`, `relp-tls`) stop at config validity. A real TLS
+handshake needs certificate material on both ends (and, for the `anon` path,
+anon-DH ciphers that modern crypto policies disable - so a green container result
+would prove less than it looks). Like real rule loading, that is a real-host
+verification item. What the harness proves for the TLS transports is: the driver
+installs, and the daemon accepts the config.
+
+**RELP to a HyperI receiver.** The plain-RELP e2e uses a stock `imrelp` receiver.
+HyperI's own receivers do not ingest RELP yet (the Edge Stream Hub and
+dfe-receiver RELP listeners are a future release, tracked by issue #2 and
+dfe-receiver#44), so there is no e2e test against them until they land.
 
 None of this is fixable in a container; it needs a privileged disposable VM.
 Until that exists, a green run means "the config is written correctly and
@@ -147,7 +187,7 @@ there is no Harbor login or cache step in the workflow.
 ```
 test/
   matrix.yml            # distro+version cases
-  receiver/             # central syslog receiver image (rsyslog on alpine)
+  receiver/             # central receiver image (rsyslog on debian trixie; imtcp + imrelp)
   images/               # per-family bake Dockerfiles (deb / el / suse)
   converge.yml          # applies the role in config-only mode
   ansible.cfg           # roles_path + community.docker connection
@@ -155,6 +195,8 @@ test/
   conftest.py           # session network + receiver fixtures; eol marker
   test_forwarding.py    # the parametrized e2e (config + forwarding, per distro)
   test_profiles.py      # the role deploys the profile it was asked for
+  test_tls_forwarding.py # syslog-tls / relp-tls config validity (driver + rsyslogd -N1)
+  test_relp_forwarding.py # plain RELP e2e (omrelp -> imrelp, marker delivered)
   run.sh                # portable entrypoint
 ```
 

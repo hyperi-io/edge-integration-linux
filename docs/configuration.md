@@ -9,11 +9,12 @@ Copyright:    (c) 2026 HYPERI PTY LIMITED
 
 # Configuration
 
-The role is driven by four variables and one profile choice. This page is the
-look-up reference for all of them: every variable with its type, default and
-effect, then what each audit profile contains, then the `auditd.conf` tuning the
-role applies. Set the variables in your inventory's `vars:` block or via
-`--extra-vars`.
+The role is driven by a handful of variables and one profile choice. This page is
+the look-up reference: every variable with its type, default and effect, then what
+each audit profile contains, then the `auditd.conf` tuning the role applies. The
+transport variables have their own page -- this table names them and
+[transport](transport.md) covers RELP and the TLS trust models. Set the
+variables in your inventory's `vars:` block or via `--extra-vars`.
 
 ## Role variables
 
@@ -22,6 +23,10 @@ role applies. Set the variables in your inventory's `vars:` block or via
 | `collector_address` | string (IP or DNS name) | none -- **required** | The collector that receives the forwarded streams: audit on TCP 12201, general syslog on TCP 12205. The run **fails immediately** if unset. |
 | `hyperi_audit_level` | `low` \| `medium` \| `high` | `medium` | Selects the audit ruleset by depth. Any other value **fails** the run. |
 | `hyperi_audit_profile_override` | `low` \| `medium` \| `high` \| `internet` | unset | **Replaces** the level's ruleset with a named profile -- it does not layer on top. An unknown value **fails** the run. Setting it alongside a non-default `hyperi_audit_level` **warns**, because the level is then discarded. Formerly `hyperi_audit_use_case`. |
+| `hyperi_audit_transport` | `tcp` \| `relp` \| `syslog-tls` \| `relp-tls` | `tcp` | Transport for both streams. `tcp` is plain syslog (default, works everywhere); `relp` adds reliable delivery; `syslog-tls` adds encryption; `relp-tls` both -- see [transport](transport.md). Any other value **fails** the run. |
+| `hyperi_audit_tls_mode` | `anon` \| `server` \| `mutual` | `anon` | Trust model for the TLS transports. `anon` = encryption only; `server` = validate the receiver, no client cert; `mutual` = client cert. `relp-tls` rejects `server`. Ignored when `transport: tcp`. |
+| `hyperi_audit_tls_ca_file` / `_client_cert` / `_client_key` / `_permitted_peer` | string (path / name) | unset | Certificate material for `server` and `mutual`. The CA is required for both; the client cert and key for `mutual`. Full detail in [transport](transport.md). |
+| `hyperi_audit_port_audit` / `hyperi_audit_port_syslog` | string (port) | `12201` / `12205` | The forward ports. Point them at the receiver's TLS listeners (e.g. 6514) when using a TLS transport; the SELinux egress grant follows whatever you set. |
 | `hyperi_audit_start_services` | boolean | `true` | `true` enables, stops and starts `auditd` and `rsyslog` as part of the run. `false` writes the configuration only and never touches services -- used by the test harness to converge inside a container that has no init. |
 
 `hyperi_audit_profile_override` replaces rather than merges, so when it is set
