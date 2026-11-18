@@ -85,7 +85,8 @@ DETECTIONS = [
         "T1548.001_setuid_set",
         "low medium high",
         "",
-        'f=$(mktemp); chmod 4755 "$f"; rm -f "$f"',
+        "python3 -c 'import os, tempfile; f = tempfile.mkstemp()[1]; "
+        "os.chmod(f, 0o4755); os.remove(f)'",
     ),
     (
         "T1078_mount",
@@ -265,7 +266,9 @@ def test_detection(
     load_unlocked(path)
     result = fires(key, script)
     if level in on.split():
-        assert result, f"{key} did not fire at {level}"
+        loaded = sudo("auditctl", "-l", check=False).stdout
+        mine = [x for x in loaded.splitlines() if key in x]
+        assert result, f"{key} did not fire at {level}. Loaded: {mine}"
     if level in off.split():
         assert not result, f"{key} fired at {level}"
 

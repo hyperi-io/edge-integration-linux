@@ -34,6 +34,7 @@ def fit_syscalls(
         The ruleset as auditctl on this host will load it.
     """
     out = []
+    seen: set[str] = set()
     for line in text.splitlines():
         if line.startswith("-a ") and " -S " in line:
             arch = "b32" if "-F arch=b32" in line else "b64"
@@ -48,6 +49,12 @@ def fit_syscalls(
             line = _EXEC_PATH.sub(
                 lambda m: m.group(1) + links.get(m.group(2), m.group(2)), line
             )
+            # Two links to one binary (insmod and rmmod to kmod) make the same
+            # rule, which auditctl rejects as already loaded.
+            rule = " ".join(line.split())
+            if rule in seen:
+                continue
+            seen.add(rule)
         out.append(line)
     trailer = "\n" if text.endswith("\n") else ""
     return "\n".join(out) + trailer
