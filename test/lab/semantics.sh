@@ -21,27 +21,36 @@ count() {
     local marker="settle_${RUN}_${RANDOM}"
     auditctl -m "${marker}" > /dev/null 2>&1
     for _ in $(seq 1 50); do
-        ausearch --input-logs -m USER --raw 2> /dev/null | grep -q "${marker}" && break
+        tail -n 200 /var/log/audit/audit.log 2> /dev/null | grep -q "${marker}" && break
         sleep 0.1
     done
-    ausearch --input-logs -k "$1" --raw 2> /dev/null | grep -c "exe=\"$2\"" || true
+    ausearch -if /var/log/audit/audit.log -k "$1" --raw 2> /dev/null | grep -c "exe=\"$2\"" || true
 }
 
-as_user() { sudo -u "${LOGIN_USER}" "$@" > /dev/null 2>&1 || true; }
-as_daemon() { systemd-run --quiet --wait -p User=nobody "$@" > /dev/null 2>&1 || true; }
+# Exit 126 or 127 means the command never ran. false exits 1 by design.
+as_user() {
+    runuser -u "${LOGIN_USER}" -- "$@" > /dev/null
+    (($? < 126)) || echo "as_user could not run: $*" >&2
+}
+as_daemon() {
+    systemd-run --quiet --wait -p User=nobody "$@" > /dev/null
+    (($? < 126)) || echo "as_daemon could not run: $*" >&2
+}
 
 report() { printf '%-4s %-60s %s\n' "$1" "$2" "$3"; }
 
 auditctl -e 1 > /dev/null
 # A login gives the user's commands an auid. Without one (a CI runner), set it
-# as login does, so sudo -u children inherit it.
-id -u "${LOGIN_USER}" > /proc/self/loginuid 2> /dev/null || true
+# as login does, so runuser children inherit it. printf is a builtin, so this
+# shell sets its own loginuid, not a child's.
+LOGIN_UID="$(id -u "${LOGIN_USER}")"
+printf '%s' "${LOGIN_UID}" > /proc/self/loginuid 2> /dev/null || true
 
 # Private copies of the tools the probes run, so exe= and path= name plain files
 # whatever coreutils the host ships. A multicall build picks its tool by name.
 P="$(mktemp -d /usr/local/lib/hprobe.XXXXXX)"
 for t in true false cat head touch; do
-    cp "$(readlink -f "$(command -v "${t}")")" "${P}/${t}"
+    cp "$(readlink -f "$(type -P "${t}")")" "${P}/${t}"
 done
 chmod 0755 "${P}" "${P}"/*
 trap 'rm -rf "${P}"' EXIT

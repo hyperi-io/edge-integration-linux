@@ -274,7 +274,8 @@ def test_detection(
 
 
 def test_semantics_probes() -> None:
-    out = sudo("bash", str(harness.HERE / "lab" / "semantics.sh")).stdout
+    probe = sudo("bash", str(harness.HERE / "lab" / "semantics.sh"))
+    out = probe.stdout + probe.stderr
     expected = {
         "E1": "true=1 false=1",
         "E2": "true=0 false=1",
