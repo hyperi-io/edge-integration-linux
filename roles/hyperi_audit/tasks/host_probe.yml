@@ -60,7 +60,8 @@
   ansible.builtin.set_fact:
     hyperi_audit_exec_watched: >-
       {{ lookup('ansible.builtin.template',
-                hyperi_audit_template_src | default(role_path ~ '/templates/hyperi-audit.rules.j2'))
+                hyperi_audit_template_src if hyperi_audit_template_src is defined
+                else role_path ~ '/templates/hyperi-audit.rules.j2')
          | hyperi_audit_exec_paths }}
   vars:
     hyperi_audit_exec_links: {}
