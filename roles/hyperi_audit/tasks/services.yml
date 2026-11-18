@@ -17,48 +17,41 @@
     state: started
   loop: [rsyslog, auditd]
 
-# A run that failed after writing config never reached its restart, so the
-# restart is decided from the host's state as well as this run's changes.
-- name: Read when each service last started
+# restart.yml writes these fingerprints to the stamp only after the restart and
+# rule load succeed, so a run that failed part-way is retried by the next one.
+- name: Fingerprint each service's config
   ansible.builtin.command:
-    argv: [systemctl, show, --value, -p, ActiveEnterTimestamp, "{{ item }}"]
-  loop: [auditd, rsyslog]
-  register: hyperi_audit_started
-  changed_when: false
-  when: hyperi_audit_init.stdout == 'systemd'
-
-- name: Find config written since its service started
-  ansible.builtin.command:
-    argv: "{{ ['find'] + hyperi_audit_service_files[item.item] + ['-newermt', item.stdout] }}"
-  loop: "{{ hyperi_audit_started.results | default([]) | selectattr('stdout', 'defined') | list }}"
+    argv: "{{ ['find'] + item.value + ['-type', 'f', '-exec', 'sha256sum', '{}', '+'] }}"
+  loop: "{{ hyperi_audit_service_config | dict2items }}"
   loop_control:
-    label: "{{ item.item }}"
-  register: hyperi_audit_stale
-  changed_when: false
-  failed_when: false
-  vars:
-    hyperi_audit_service_files:
-      auditd: [/etc/audit/auditd.conf]
-      rsyslog: [/etc/rsyslog.conf, /etc/rsyslog.d/99-hyperi-rsyslog.conf]
-
-# augenrules --check compares rules.d with the ruleset the last load built.
-- name: Check whether rules.d differs from the loaded ruleset
-  ansible.builtin.command:
-    argv: [augenrules, --check]
-  register: hyperi_audit_rules_check
+    label: "{{ item.key }}"
+  register: hyperi_audit_config_sums
   changed_when: false
   failed_when: false
 
-- name: Decide whether to restart
+- name: Read the fingerprints last applied
+  ansible.builtin.slurp:
+    src: "{{ hyperi_audit_stamp }}"
+  register: hyperi_audit_stamp_read
+  failed_when: false
+
+- name: Decide which services to restart
   ansible.builtin.set_fact:
-    hyperi_audit_restart_needed: >-
-      {{ (hyperi_audit_restart_needed | default(false) | bool)
-         or (hyperi_audit_stale.results | default([])
-             | selectattr('stdout', 'defined') | selectattr('stdout') | list | length > 0)
-         or (hyperi_audit_started.results | default([])
-             | selectattr('stdout', 'defined') | rejectattr('stdout') | list | length > 0)
-         or (hyperi_audit_rules_check.stdout is search('should be updated')) }}
+    hyperi_audit_fingerprints: "{{ hyperi_audit_now }}"
+    hyperi_audit_restart_auditd: >-
+      {{ hyperi_audit_restart_needed | default(false) | bool
+         or hyperi_audit_now.auditd != hyperi_audit_applied.auditd | default('') }}
+    hyperi_audit_restart_rsyslog: >-
+      {{ hyperi_audit_restart_needed | default(false) | bool
+         or hyperi_audit_now.rsyslog != hyperi_audit_applied.rsyslog | default('') }}
+  vars:
+    hyperi_audit_now: >-
+      {{ dict(hyperi_audit_config_sums.results | map(attribute='item.key')
+              | zip(hyperi_audit_config_sums.results | map(attribute='stdout_lines')
+                    | map('sort') | map('join', '\n') | map('hash', 'sha256'))) }}
+    # e30= is base64 for {}: no stamp yet.
+    hyperi_audit_applied: "{{ hyperi_audit_stamp_read.content | default('e30=') | b64decode | from_json }}"
 
-- name: Restart the services when the config changed
+- name: Restart the services whose config changed
   ansible.builtin.include_tasks: restart.yml
-  when: hyperi_audit_restart_needed | bool
+  when: hyperi_audit_restart_auditd | bool or hyperi_audit_restart_rsyslog | bool

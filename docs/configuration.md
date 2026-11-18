@@ -12,6 +12,7 @@ The role checks every input before it touches the host, so a bad value fails the
 | `hyperi_audit_level` | `medium` | `low`, `medium`, `high` | Ruleset depth. Levels are cumulative: `medium` is `low` plus more, `high` is `medium` plus more. |
 | `hyperi_audit_use_cases` | `[]` | a list of `webserver`, `edge`, `container-host` | Overlays applied on top of the level. See [Overlays](#overlays). |
 | `hyperi_audit_webserver_users` | `www-data`, `apache`, `nginx`, `httpd`, `lighttpd`, `caddy` | account names | Accounts the `webserver` overlay treats as web servers. The role resolves the ones that exist on the host to uids at deploy time. When none exist it warns and adds no webshell rules. |
+| `hyperi_audit_user_watch_max` | `20` | integer, 0 or more | How many login accounts get a watch on their `authorized_keys` (`medium`) and shell start-up files (`high`). Accounts with a login shell and a home directory qualify. Each watch costs every syscall about 2 ns. |
 | `hyperi_audit_transport` | `tcp` | `tcp`, `syslog-tls`, `relp`, `relp-tls` | How both streams leave the host. See [transport](transport.md). |
 | `hyperi_audit_tls_mode` | `anon` | `anon`, `server`, `mutual` | TLS trust for `syslog-tls` and `relp-tls`. `relp-tls` takes `anon` or `mutual`. Ignored for `tcp` and `relp`. |
 | `hyperi_audit_tls_ca_file` | empty | absolute path on the endpoint | CA that signed the receiver's certificate. Required for `server` and `mutual`. |
@@ -45,29 +46,29 @@ Pick the lowest level that covers what you need to see. Every level shares the c
 | `priority_boost` in `auditd.conf` | 2 | 4 | 4 |
 | `CWD` records | excluded | kept | kept |
 | `ptrace` | `POKETEXT`, `POKEDATA`, `POKEUSER` only | every call | every call |
-| systemd unit watches | `/etc/systemd/system`, `/usr/lib/systemd/system` | all of `/etc/systemd`, `/usr/lib/systemd`, `/run/systemd/system` | as `medium` |
+| systemd unit watches | `/etc/systemd/system`, `/usr/lib/systemd/system` and the generator directories | all of `/etc/systemd`, `/usr/lib/systemd`, `/usr/local/lib/systemd`, `/run/systemd/system` | as `medium` |
 
 ### What each level adds
 
 | Area | `low` (the base) | `medium` adds | `high` adds |
 |---|---|---|---|
-| Execution | Root exec from `/tmp`, `/var/tmp`, `/dev/shm`. Any exec from `/dev/shm`. setuid exec | Root exec from `/home`, `/usr/local/bin`, `/opt`. setgid exec | Any exec from `/tmp` and `/var/tmp`. `bash` as root, `python`, `python3`, `perl`. Exec in another user's privilege context. setuid and setgid calls |
+| Execution | Root exec from `/tmp`, `/var/tmp`, `/dev/shm`. Any exec from `/dev/shm`. setuid exec. A setuid or setgid bit being set | Root exec from `/home`, `/usr/local/bin`, `/opt`. setgid exec | Any exec from `/tmp` and `/var/tmp`. `bash` as root, `python`, `python3`, `perl`. Exec in another user's privilege context. setuid and setgid calls. Every command a login session runs, as the last rule, bar the excluded ones below |
 | Audit self-protection | `/var/log/audit`, `/etc/audit`, `/etc/audisp`, the audit tools | `/etc/libaudit.conf`, `ausearch`, `aureport`, `aulast`, `aulastlogin`, `auvirt` | |
-| Kernel | eBPF, `memfd_create`, `kexec`, `open_by_handle_at`, `process_vm_readv` and `_writev`, module load and unload, `/etc/modprobe.d` | `setns`, `unshare`, `io_uring_setup`, sysctl files, `/etc/modules-load.d`, PAM module directories | `pidfd_getfd`, `userfaultfd` |
+| Kernel | eBPF, `memfd_create`, `kexec`, `open_by_handle_at`, `process_vm_readv` and `_writev`, module load and unload, `/etc/modprobe.d`, PAM module directories | `setns`, `unshare`, `pivot_root`, `io_uring_setup`, sysctl files and `sysctl`, `/etc/modules-load.d` | `pidfd_getfd`, `userfaultfd` |
 | Time | `settimeofday`, `clock_settime`, `/etc/localtime` | `adjtimex`, file timestamp changes from a login session | |
-| Persistence | cron directories and `crontab`, `/var/spool/cron`, init scripts, `rc.local`, `systemctl` | `anacrontab`, cron and at allow and deny lists, `at`, `/etc/init`, motd scripts, udev rules | XDG autostart |
-| Accounts and credentials | `sudoers`, `passwd`, `group`, `shadow` reads and writes, `gshadow`, `useradd`, `usermod`, `userdel`, `su`, `sudo`, `pkexec` | group tools, `gpasswd`, `chage`, `setcap`, `opasswd`, `ldapsearch`, `dbus-send`, `gdbus`, `pam.d`, root touching another user's home | `limits.conf`, `limits.d`, `pam_env.conf` |
-| Shell and SSH | `ld.so.preload`, `/etc/profile` and `profile.d`, root's `.bashrc`, `sshd_config`, `/root/.ssh` | `ld.so.conf`, shell rc files, root's other profiles | |
+| Persistence | cron directories and `crontab`, `/var/spool/cron`, init scripts, `rc.local`, `systemctl`, systemd generator directories | `anacrontab`, cron and at allow and deny lists, `at`, `/etc/init`, motd scripts, udev rules (`/etc`, `/usr/lib` and `/run`), `/usr/local/lib/systemd`, `/boot` | XDG autostart |
+| Accounts and credentials | `sudoers`, `passwd`, `group`, `shadow` reads and writes, `gshadow`, `useradd`, `usermod`, `userdel`, `su`, `sudo`, `pkexec`, `pam.d`, `pam.conf` | group tools, `gpasswd`, `chage`, `setcap`, `opasswd`, `ldapsearch`, `dbus-send`, `gdbus`, polkit rules, Kerberos and SSSD config, root touching another user's home | `limits.conf`, `limits.d`, `pam_env.conf` |
+| Shell and SSH | `ld.so.preload`, `/etc/profile` and `profile.d`, root's `.bashrc`, `sshd_config`, `/root/.ssh` | `ld.so.conf`, shell rc files, root's other profiles. Each login account's `authorized_keys` | Each login account's `.bashrc` and `.profile` | |
 | File changes from a login session | | `chmod`, `chown` and xattr calls, file deletion and rename | |
-| Defence evasion | dmesg clear, ASLR off, rsyslog config, `setenforce`, `systemd-run`, SELinux and AppArmor config, `shred`, `wipe`, root deleting files | `scrub`, `dd` | |
-| Network | AF_ALG crypto sockets, raw packet sockets, socket filters | Every successful IPv4 and IPv6 `connect`. Network config files | Every IPv4 and IPv6 socket created, DNS lookups included |
-| Mounts and host identity | `mknod`, `mount` from a session, `sethostname`, `/etc/hosts` | `swapon`, `swapoff`, `/etc/hostname`, `/etc/issue` | |
-| Power | `shutdown`, `reboot` | `poweroff`, `halt` | |
+| Defence evasion | dmesg clear, ASLR off, rsyslog and syslog-ng config, `setenforce`, `systemd-run`, SELinux and AppArmor config, `shred`, `wipe`, root deleting files | `scrub`, `dd`, `chcon`, `setfiles`, `semanage`, `setsebool` from a session | |
+| Network | AF_ALG crypto sockets, raw packet sockets, socket filters | Every successful IPv4 and IPv6 `connect`. Network config files. Firewall config, `firewall-cmd`, `ufw` | Every IPv4 and IPv6 socket created, DNS lookups included |
+| Mounts and host identity | `mknod`, mounts from a session (old and new mount API), `sethostname`, `/etc/hosts` | `chroot` from a session, `swapon`, `swapoff`, `/etc/hostname`, `/etc/issue` | |
+| Power | `shutdown`, `reboot`, the `reboot(2)` syscall | `poweroff`, `halt` | |
 | Tools | `wget`, `curl`, `ssh`, `socat`, `nc`, `ncat`, `stunnel` | `ftp`, `scp`, `sftp`, remote-desktop tools, `certutil`, `unzip`, `base64`, `openssl`, mail config | Recon tools (`whoami`, `id`, `uname`, `nmap`, `ss`, `tcpdump` and more), archive tools, `cp` and `mv` from a session |
 | Containers and packages | `docker` and its socket | `dockerd`, `podman`, `containerd`, `runc`, `crictl`, `kubelet`, Docker config. Package managers | More package managers |
-| High only | | | SysV IPC, denied opens under `/etc` and `/root`, login records (`utmp`, `wtmp`, `btmp`, `lastlog`), GRUB config, BigFix, Chef, Salt and Puppet config |
+| High only | | | SysV IPC, denied opens under `/etc` and `/root`, login records (`utmp`, `wtmp`, `btmp`, `lastlog`), BigFix, Chef, Salt and Puppet config where installed |
 
-Every level also carries a 32-bit ABI tripwire: the rules are `arch=b64`, so a short list of `b32` rules flags a 32-bit process doing what they watch.
+Every level carries a 32-bit ABI tripwire: the rules are `arch=b64`, so `b32` rules flag a 32-bit process loading a module, tracing or changing uid. `medium` and up add its `execve`, `open` and `connect`, which fire on every such call a 32-bit app makes.
 
 At `high`, `grep`, `ls`, `cat` and seven other common commands run from a login session are excluded, so `sudo` sessions do not flood the privilege-context rule.
 
@@ -77,9 +78,9 @@ An overlay adds or removes rules for what the host does. Combine them freely wit
 
 | Overlay | Adds | Removes | Use it on |
 |---|---|---|---|
-| `webserver` | Every `execve` and `execveat` by a web server account, key `T1505.003_webshell` | `connect` logging for those accounts, which talk to their backends on every request | Hosts serving HTTP |
+| `webserver` | Every `execve` and `execveat` by a web server account, key `T1505.003_webshell`. Any exec from `/var/www`, `/srv/www`, `/srv/http` or `/usr/share/nginx/html`, key `T1505.003_webroot_exec` | `connect` logging for those accounts, which talk to their backends on every request | Hosts serving HTTP |
 | `edge` | nothing | Per-connection `connect` logging (`medium`, `high`) and per-socket logging (`high`) | Internet-facing hosts with a firewall or NIDS that logs flows |
-| `container-host` | nothing | The runtime's own `setns`, `unshare`, `mount`, `umount2` and `bpf` calls from `runc`, `crun`, `containerd`, `dockerd`, `conmon` and PID 1 | Docker, containerd or Podman hosts |
+| `container-host` | nothing | The runtime's own namespace (`setns`, `unshare`, `pivot_root`), mount (old and new API) and `bpf` calls from `runc`, `crun`, `containerd`, `dockerd`, `conmon` and PID 1 | Docker, containerd or Podman hosts |
 
 Per-connection logging is the largest event source the ruleset has. On a busy host it can overflow the kernel backlog, and `--backlog_wait_time 0` then drops events rather than stalling the host. Measured numbers are in [rulesets](rulesets.md#the-cost-of-a-rule).
 

@@ -19,8 +19,7 @@ def network() -> Iterator[str]:
 @pytest.fixture(scope="session")
 def receiver(network: str) -> Iterator[str]:
     """Run one syslog receiver that every distro under test forwards into."""
-    if not harness.image_exists(harness.RECEIVER_IMAGE):
-        harness.build_receiver()
+    harness.build_receiver()
     harness.run(["docker", "rm", "-f", harness.RECEIVER_NAME], check=False)
     harness.run(
         [

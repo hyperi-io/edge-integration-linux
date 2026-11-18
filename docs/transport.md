@@ -9,7 +9,7 @@ Both streams travel as plain TCP syslog unless you pick otherwise. RELP adds ack
 | `relp` | `omrelp` | yes | no | `rsyslog-relp` |
 | `relp-tls` | `omrelp` with `tls="on"` | yes | yes | `rsyslog-relp` |
 
-Every transport gets the same disk-assisted queue per stream, so a receiver outage spools records to disk rather than dropping them. RELP closes the remaining gap: TCP syslog can lose the records in flight when a connection breaks, and RELP resends anything the receiver did not acknowledge.
+Every transport gets the same disk-assisted queue per stream, so a receiver outage spools records to disk, up to 1 GB a stream. Past that cap rsyslog drops new records. TCP syslog can lose the records in flight when a connection breaks, and RELP resends anything the receiver did not acknowledge.
 
 EdgeStream Hub takes syslog over UDP, TCP and TLS, so use `tcp` or `syslog-tls` with it. RELP ingest is not in EdgeStream Hub yet, tracked in [issue #2](https://github.com/hyperi-io/edge-integration-linux/issues/2). Any rsyslog `imrelp` listener, syslog-ng or other RELP receiver takes `relp` and `relp-tls`.
 
@@ -35,7 +35,7 @@ Under `server` and `mutual` the endpoint accepts a receiver certificate only if 
 
 `anon` encrypts but authenticates nobody, so an active man-in-the-middle can read the stream. Use it on a path you trust, such as a VPN, and use `server` or `mutual` anywhere else. It also needs anonymous Diffie-Hellman ciphers, which the default crypto policy on RHEL 8 and later disables. There the handshake fails with `No supported cipher suites have been found`.
 
-The role reads certificate files from the paths you give it and never creates, copies or rotates them. Put them on each endpoint before the role runs, with your config management or your image build.
+The role points rsyslog at the certificate paths you give it and never creates, copies or rotates the files. Put them on each endpoint before the role runs, with your config management or your image build.
 
 | File | Variable | Owner and mode |
 |---|---|---|

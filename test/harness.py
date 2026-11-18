@@ -205,7 +205,7 @@ def start_uut(distro: Mapping) -> str:
     return name
 
 
-def _ansible_env() -> dict[str, str]:
+def ansible_env() -> dict[str, str]:
     env = dict(os.environ)
     env["ANSIBLE_CONFIG"] = str(HERE / "ansible.cfg")
     env["ANSIBLE_COLLECTIONS_PATH"] = str(HERE / "collections")
@@ -249,7 +249,7 @@ def converge(
         "-e",
         json.dumps(variables),
     ]
-    return run(cmd, check=check, cwd=HERE, env=_ansible_env())
+    return run(cmd, check=check, cwd=HERE, env=ansible_env())
 
 
 def exec_in(name: str, script: str) -> subprocess.CompletedProcess[str]:
@@ -313,22 +313,66 @@ def receiver_log() -> str:
 
 
 def assert_delivered_once(
-    marker_text: str, timeout: int = 60, interval: int = 3
+    marker_text: str,
+    listener: str = "audit",
+    timeout: int = 60,
+    interval: int = 3,
+    settle: int = 6,
 ) -> None:
-    """Wait for the marker at the receiver, then require exactly one copy.
+    """Wait for the marker at the receiver, then require one copy on the listener.
 
-    A second copy means the audit stream also reached the general catch-all,
-    or rsyslog loaded the drop-in twice.
+    A second copy, or one on another listener, means the audit stream also
+    reached the general catch-all, or rsyslog loaded the drop-in twice. The
+    settle wait gives a late duplicate time to arrive.
+
+    Args:
+        marker_text: The run-unique marker seeded into audit.log.
+        listener: The receiver input the marker must arrive on.
+        timeout: Seconds to wait for the first copy.
+        interval: Seconds between polls.
+        settle: Seconds to wait after the first copy before counting.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline and marker_text not in receiver_log():
         time.sleep(interval)
-    received = receiver_log()
-    count = received.count(marker_text)
-    assert count == 1, (
-        f"marker {marker_text} arrived {count} times, expected exactly 1\n"
-        f"--- last receiver log ---\n{received[-2000:]}"
+    time.sleep(settle)
+    lines = [x for x in receiver_log().splitlines() if marker_text in x]
+    assert len(lines) == 1, (
+        f"marker {marker_text} arrived {len(lines)} times, expected exactly 1\n"
+        + "\n".join(lines)
     )
+    assert lines[0].startswith(f"{listener} "), (
+        f"marker arrived on the wrong listener, expected {listener}: {lines[0]}"
+    )
+    assert " auditd" in lines[0], f"marker lost its auditd tag: {lines[0]}"
+
+
+def assert_not_delivered(marker_text: str, wait: int = 20) -> None:
+    """Require the marker never reaches the receiver within the wait."""
+    time.sleep(wait)
+    assert marker_text not in receiver_log(), f"marker {marker_text} was delivered"
+
+
+def install_receiver_ca(name: str, dest_dir: str = "/etc/hyperi-test") -> str:
+    """Copy the receiver's CA certificate into a container and return its path."""
+    ca = run(["docker", "exec", RECEIVER_NAME, "cat", "/etc/hyperi-tls/ca.pem"]).stdout
+    path = f"{dest_dir}/ca.pem"
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            "-i",
+            name,
+            "sh",
+            "-c",
+            f"mkdir -p {dest_dir} && cat > {path}",
+        ],
+        input=ca,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    return path
 
 
 def teardown_uut(distro: Mapping) -> None:

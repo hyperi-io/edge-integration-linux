@@ -94,7 +94,7 @@ What changes from host to host:
 
 - Both streams are plaintext by default, and `syslog-tls` or `relp-tls` encrypts them. [Security considerations](security-considerations.md) covers what the role changes on the host.
 - The disk-assisted queues hold records through a receiver outage. `--backlog_wait_time 0` trades lost events for a host that never stalls on a full kernel backlog.
-- The role restarts the services when this run changed their config, when a config file is newer than the running service, or when `augenrules --check` says the loaded rules are out of date. It then logs how many of the merged rules the kernel holds.
+- The role fingerprints each service's config, `auditd.conf` and `rules.d` for auditd and `rsyslog.conf` and `rsyslog.d` for rsyslog. It restarts a service when its fingerprint differs from the one in `/var/lib/hyperi_audit/applied.json`, and writes that file only after the restart and rule load succeed. A run that fails part-way is finished by the next one. It then logs how many of the merged rules the kernel holds.
 - Every rule costs each syscall it can match, so the ruleset uses the cheapest form each watch allows ([the cost of a rule](rulesets.md#the-cost-of-a-rule)).
 
 ## Why it's built this way

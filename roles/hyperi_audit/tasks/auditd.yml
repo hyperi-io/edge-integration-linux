@@ -122,18 +122,8 @@
     - "'webserver' in hyperi_audit_effective_use_cases"
     - hyperi_audit_webserver_uids | length == 0
 
-# One call for all of them: find -L follows symlinked directories such as EL's
-# /etc/init.d, and prints only the paths that are directories here.
-- name: Check which watched directories exist
-  ansible.builtin.command:
-    argv: "{{ ['find', '-L'] + hyperi_audit_watch_dirs + ['-maxdepth', '0', '-type', 'd'] }}"
-  register: hyperi_audit_dir_find
-  changed_when: false
-  failed_when: false
-
-- name: Record the watched directories that exist
-  ansible.builtin.set_fact:
-    hyperi_audit_present_dirs: "{{ hyperi_audit_dir_find.stdout_lines | intersect(hyperi_audit_watch_dirs) }}"
+- name: Read the directories and syscall tables the ruleset depends on
+  ansible.builtin.import_tasks: host_probe.yml
 
 - name: Write the audit ruleset
   ansible.builtin.template:

@@ -17,13 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The run fails before changing the host on a malformed receiver address, port or TLS file path, and after loading rules it logs how many of the merged rules the kernel holds.
 - Tests: a Docker harness over every distro in `test/matrix.yml`, a CI kernel job that loads every rendered ruleset and fires the detections, a lint job, and a VM lab with a syscall benchmark and rule-order probes.
 - Role defaults and Galaxy metadata, and a Renovate config.
+- `rules/hyperi-audit-<profile>.rules`: each profile as a plain rules file for any x64 or arm64 host. A syscall some supported host lacks gets a line of its own, so only that line fails there. CI fails if they drift from the template or a heavier level stops holding the lighter one.
+- Detections at `low`: a setuid or setgid bit being set, the new mount API, `reboot(2)`, systemd generator directories, syslog-ng config. At `medium`: `chroot` and `pivot_root` from a session, polkit rules, Kerberos and SSSD config, firewall config and tools, SELinux relabelling tools, `sysctl`, `/boot`, udev rules under `/usr/lib` and `/run`, and each login account's `authorized_keys` (`hyperi_audit_user_watch_max`). At `high`: every command a login session runs, and each login account's `.bashrc` and `.profile`. The `webserver` overlay adds exec from a web root.
+- SigmaHQ's `susp_activity` key on the `scp`, `sftp`, `ftp`, `socat`, `rdesktop`, `tshark` and `wireshark` watches.
 
 ### Changed
 
 - The role adds `/etc/audit/rules.d/hyperi-audit.rules` beside the host's rules and leaves the distro's rules in place.
-- A watched directory that exists is written as `-a always,exit -F perm= -F dir=`, which costs about a quarter of a `-w` watch. Median ns per `getppid` with the ruleset loaded, by `test/lab/bench.sh` in 2026-11, before and after: Debian 13 (kernel 6.12) `low` 533 to 352, `medium` 737 to 551, `high` 859 to 626. Rocky 9 (kernel 5.14) `low` 507 to 391, `medium` 745 to 596, `high` 849 to 734.
+- A watched directory that exists is written as `-a always,exit -F perm= -F dir=`, which costs about a quarter of a `-w` watch. With the added detections, the published files cost about the same per syscall as the rules they replace ([rulesets](docs/rulesets.md#the-cost-of-a-rule)).
 - The role is renamed `hsaudit` to `hyperi_audit`, with its variables (`hyperi_audit_*`) and deployed paths (`/etc/audit/rules.d/hyperi-audit.rules`, `/etc/rsyslog.d/99-hyperi-rsyslog.conf`).
-- Services restart only when their config changed or the host is out of step with it.
+- Services restart only when their config differs from the last config applied, recorded in `/var/lib/hyperi_audit/applied.json` once a restart succeeds.
+- Keys on ATT&CK ids revoked in 2026 move to the current ids, and keep the old key as a second key: `T1562*` to `T1685`, `T1562.012` to `T1685.004`, `T1070.002` to `T1685.006`, `T1099` to `T1070.006`. `auditconfig` and `audittools` gain `T1685.004` keys. `tcpdump`, `tshark` and `wireshark` gain `T1040_sniff`.
+- The role fits each `-S` list to the host's syscall table and points exec watches at the real binary, so rules load on arm64 and a symlinked binary's watch fires.
+- PAM config and module directories move from `medium` to `low`. `/boot` at `medium` replaces the `high` GRUB config watches.
 - The release artefact is `edge-integration-linux-<git describe>.tar.gz`, built by `build-tarball.sh` from the committed tree with `git archive`.
 - Licensed under Apache-2.0, with third-party attributions in `NOTICE`.
 

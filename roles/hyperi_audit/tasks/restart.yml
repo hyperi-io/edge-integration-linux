@@ -1,7 +1,8 @@
 ---
 # The auditd unit sets RefuseManualStop=yes on EL. A runtime drop-in lifts it for
 # this restart only: /run clears on reboot, and the always: section removes it.
-- name: Restart auditd and rsyslog, then load the rules
+- name: Restart auditd, then load the rules
+  when: hyperi_audit_restart_auditd | bool
   block:
     - name: Lift RefuseManualStop for this run
       when: hyperi_audit_init.stdout == 'systemd'
@@ -40,11 +41,6 @@
       changed_when: true
       when: not hyperi_audit_immutable | bool
 
-    - name: Restart rsyslog
-      ansible.builtin.service:
-        name: rsyslog
-        state: restarted
-
   always:
     - name: Remove the RefuseManualStop drop-in
       ansible.builtin.file:
@@ -57,8 +53,16 @@
         daemon_reload: true
       when: hyperi_audit_init.stdout == 'systemd'
 
+- name: Restart rsyslog
+  ansible.builtin.service:
+    name: rsyslog
+    state: restarted
+  when: hyperi_audit_restart_rsyslog | bool
+
 - name: Compare the loaded rules with the merged ruleset
-  when: not hyperi_audit_immutable | bool
+  when:
+    - hyperi_audit_restart_auditd | bool
+    - not hyperi_audit_immutable | bool
   block:
     - name: List the rules the kernel holds
       ansible.builtin.command:
@@ -71,8 +75,8 @@
         src: /etc/audit/audit.rules
       register: hyperi_audit_merged
 
-    # -i skips rules an old kernel does not know, so a shortfall is expected on
-    # el6 and el7. On a current kernel it means a rule failed to parse.
+    # A rule naming a directory or SELinux type this host lacks fails to load,
+    # so a small shortfall is expected. A large one means a rule failed to parse.
     - name: Report how many rules loaded
       ansible.builtin.debug:
         msg: >-
@@ -84,3 +88,20 @@
         hyperi_audit_merged_lines: "{{ (hyperi_audit_merged.content | b64decode).splitlines() | reject('match', '^\\s*(#|$)') | list }}"
         hyperi_audit_merged_count: "{{ hyperi_audit_merged_lines | select('match', '^-(a|w) ') | list | length }}"
         hyperi_audit_held: "{{ hyperi_audit_loaded.stdout_lines | select('match', '^-(a|w) ') | list | length }}"
+
+- name: Create the stamp directory
+  ansible.builtin.file:
+    path: "{{ hyperi_audit_stamp | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Reached only when every restart and load above succeeded.
+- name: Record the config just applied
+  ansible.builtin.copy:
+    dest: "{{ hyperi_audit_stamp }}"
+    content: "{{ hyperi_audit_fingerprints | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0600"

@@ -20,6 +20,8 @@ Understand it:
 
 - [Architecture](architecture.md): the parts on the host, how records flow, and why it is built this way.
 - [Rulesets](rulesets.md): levels and overlays, rule order, the cost of a rule, and how to add one.
+- [Ruleset design notes](ruleset-design-notes.md): why the less obvious rules look the way they do.
+- [Ruleset history](ruleset-history.md): where the ruleset came from, and its changelog back to 2021.
 - [Security considerations](security-considerations.md): what the role changes on a host and what to protect.
 - [Decisions](decisions/README.md): the architecture decision records.
 

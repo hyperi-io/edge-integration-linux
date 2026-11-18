@@ -4,6 +4,14 @@
     hyperi_audit_auditd_package: "{{ 'auditd' if ansible_facts['os_family'] == 'Debian' or ansible_facts['distribution'] == 'SLES' else 'audit' }}"
     hyperi_audit_selinux_enabled: "{{ ((ansible_facts['selinux'] | default({})).status | default('disabled')) == 'enabled' }}"
 
+# A fresh Debian or Ubuntu cloud image has an empty package index.
+- name: Refresh the apt package index
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  changed_when: false
+  when: ansible_facts['os_family'] == 'Debian'
+
 # latest: every run brings rsyslog and audit up to the distro's current release.
 - name: Install rsyslog and auditd
   ansible.builtin.package:

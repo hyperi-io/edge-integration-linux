@@ -42,9 +42,42 @@ hyperi_audit_watch_dirs:
   - /etc/exim4
   - /etc/docker
   - /var/opt/BESClient
+  - /opt/BESClient
   - /etc/chef
   - /etc/salt
   - /etc/puppet/ssl
   - /etc/modules-load.d
   - /usr/lib64/security
   - /usr/lib/x86_64-linux-gnu/security
+  - /usr/lib/aarch64-linux-gnu/security
+  - /usr/lib/security
+  - /etc/systemd/system-generators
+  - /usr/local/lib/systemd/system-generators
+  - /usr/local/lib/systemd
+  - /boot
+  - /usr/lib/udev/rules.d
+  - /run/udev/rules.d
+  - /etc/polkit-1
+  - /etc/krb5.conf.d
+  - /etc/sssd
+  - /etc/iptables
+  - /etc/syslog-ng
+  - /var/www
+  - /srv/www
+  - /srv/http
+  - /usr/share/nginx/html
+
+
+# ausyscall table names per host architecture: b64 is the native ABI, b32 the
+# 32-bit compat ABI the tripwire rules watch.
+hyperi_audit_syscall_tables:
+  x86_64: {b64: x86_64, b32: i386}
+  aarch64: {b64: aarch64, b32: arm}
+
+# The config each service reads at start. A change since the last applied
+# fingerprint restarts it.
+hyperi_audit_service_config:
+  auditd: [/etc/audit/auditd.conf, /etc/audit/rules.d]
+  rsyslog: [/etc/rsyslog.conf, /etc/rsyslog.d]
+
+hyperi_audit_stamp: /var/lib/hyperi_audit/applied.json

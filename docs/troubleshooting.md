@@ -35,9 +35,9 @@ When records are not arriving, walk the path from the host outward, as root on t
 1. `systemctl is-active auditd rsyslog` prints `active` twice. On el6, `service auditd status` and `service rsyslog status`.
 2. `tail -n 3 /var/log/audit/audit.log` shows recent records. If not, auditd is not writing, or the kernel holds no rules (`auditctl -l`).
 3. `ls -l /var/log/audit/audit.log` shows a group rsyslog runs in, mode `0640` or wider. On Debian and Ubuntu that is `adm`.
-4. `grep -E '(IncludeConfig|include).*rsyslog.d' /etc/rsyslog.conf` finds an include, so rsyslog reads `/etc/rsyslog.d/99-hyperi-rsyslog.conf`.
+4. `grep -E '^\s*(\$IncludeConfig|include\().*rsyslog\.d/' /etc/rsyslog.conf` finds an uncommented include, so rsyslog reads `/etc/rsyslog.d/99-hyperi-rsyslog.conf`.
 5. `rsyslogd -N1` reports no errors.
 6. The receiver port answers from the host: `timeout 5 bash -c '</dev/tcp/<receiver>/12201' && echo open`. If not, check firewalls on the path, and on SELinux hosts `semanage port -l | grep 12201`.
 7. With a TLS transport, rsyslog's log names any handshake failure. `No supported cipher suites have been found` under `anon` means the host's crypto policy turns off anonymous ciphers: use `server` or `mutual` ([transport](transport.md)).
 
-If all seven pass, records are leaving the host. Look at the receiver's ingest next.
+If all seven pass, rsyslog has what it needs to send. Run `logger hyperi-test` and look for that line at the receiver on the syslog port. If it does not arrive, `journalctl -u rsyslog` names a suspended action or a failed connection.

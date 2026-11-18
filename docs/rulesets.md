@@ -47,22 +47,45 @@ The ruleset is forked from Florian Roth's (Neo23x0) "Best Practice Auditd Config
 
 Neo23x0 (Florian Roth) -> ACSC (ASD) OpenSCAP -> NIST -> DISA STIG -> alphagov/GDS -> US DoD -> SigmaHQ
 
-Rules marked `sigma:` in the template exist so a SigmaHQ auditd rule can fire. Their detection logic comes from SigmaHQ (https://github.com/SigmaHQ/sigma) under the Detection Rule License 1.1. Keys carry MITRE ATT&CK technique ids where one maps.
+Keys carry MITRE ATT&CK technique ids where one maps. Rules marked `sigma:` in the template also let a SigmaHQ auditd rule fire where your pipeline runs SigmaHQ, and each is worth its cost without it. Their detection logic comes from SigmaHQ (https://github.com/SigmaHQ/sigma) under the Detection Rule License 1.1. The full changelog and the reasons behind individual rules are in [ruleset history](ruleset-history.md).
+
+## Using a rules file on its own
+
+Each profile is published as a plain auditd rules file, for any x64 or arm64 host, no Ansible needed:
+
+| Profile | File |
+|---|---|
+| `low` | https://github.com/hyperi-io/edge-integration-linux/blob/main/rules/hyperi-audit-low.rules |
+| `medium` | https://github.com/hyperi-io/edge-integration-linux/blob/main/rules/hyperi-audit-medium.rules |
+| `high` | https://github.com/hyperi-io/edge-integration-linux/blob/main/rules/hyperi-audit-high.rules |
+| `internet` | https://github.com/hyperi-io/edge-integration-linux/blob/main/rules/hyperi-audit-internet.rules |
+
+Copy one to `/etc/audit/rules.d/hyperi-audit.rules` and run `augenrules --load`. The last line, `-e 2`, locks the rules until the next reboot, so check first: `augenrules --load` prints each rule the kernel rejects, and `auditctl -l | wc -l` against the file's rule count shows how many loaded. Other files in `rules.d` load too, and one that sorts after `hyperi-audit.rules` can change its settings. `internet` is `medium` with the `edge` and `webserver` overlays, its webshell rules set for uid 33 (`www-data`) and 48 (`apache`).
+
+A syscall some supported host lacks, such as `open` on arm64 or `fchmodat2` before kernel 6.6, has a rule line of its own, so on that host only the line fails, and the `-i` at the top skips it. A directory missing on the host fails the same way. The files are generated from the template, and CI fails if they drift from it or if a heavier level stops holding every rule of the lighter one.
+
+The role does four things a static file cannot:
+
+- Points exec watches at the real binary. A watch on a symlink never fires, and `/usr/bin/python3`, `/bin/nc` and `/sbin/reboot` are symlinks on most distros.
+- Watches each login account's `authorized_keys` (`medium`) and shell start-up files (`high`).
+- Leaves out rules for components the host does not have, such as Puppet or SSSD.
+- Watches a missing persistence directory for its creation, where the static file's rule fails to load.
 
 ## The cost of a rule
 
-Every syscall walks each rule whose syscall mask includes it, so a rule with a wide mask costs the host on every syscall it makes. A `-w dir/` watch has every syscall in its mask and costs about 15 ns on each one. The same watch written as `-a always,exit -F arch=b64 -F perm=wa -F dir=` gets a mask of just the syscalls `perm=` covers, at about a quarter of that.
+Every syscall walks each rule whose syscall mask includes it, so a rule with a wide mask costs the host on every syscall it makes. A `-w dir/` watch has every syscall in its mask and costs about 15 ns on each one. The same watch written as `-a always,exit -F arch=b64 -F perm=wa -F dir=` gets a mask of just the syscalls `perm=` covers, at about a quarter of that. Every rule also costs each syscall a mask check of about 2 ns, a file watch included, so the rule count sets a floor: 40 file watches added 72 ns to `getppid`.
 
 The role stats each watched directory at deploy time and writes the cheaper form where it exists. A missing directory cannot take a `dir=` rule, so it keeps the `-w` form.
 
-The table gives the median cost of one `getppid` call, the cheapest syscall there is, so the figure is the rule walk alone. `test/lab/bench.sh` produced it in lab VMs, and re-running it there gives the figure for your kernel.
+The table gives the median cost of one `getppid` call, the cheapest syscall there is, so the figure is the rule walk alone: the published file for each level against the rules it replaced. `test/lab/bench.sh` measured it in lab VMs in 2026-11. The same ruleset varied by up to 70 ns between runs, and re-running the bench gives the figure for your kernel. The role's per-host file has fewer rules than the published one, so it costs a little less.
 
 | Ruleset | Debian 13, kernel 6.12 | Rocky 9, kernel 5.14 |
 |---|---|---|
-| Audit on, no rules | about 150 to 220 ns | about 150 to 220 ns |
-| `low` | 352 ns | 391 ns |
-| `medium` | 551 ns | 596 ns |
-| `high` | 626 ns | 734 ns |
+| Audit on, no rules | 160 ns | 162 ns |
+| `low`, before and now | 547 to 621 ns | 494 to 502 ns |
+| `medium`, before and now | 754 to 719 ns | 710 to 782 ns |
+| `high`, before and now | 905 to 872 ns | 862 to 949 ns |
+| `internet`, before and now | 739 to 761 ns | 748 to 840 ns |
 
 Event volume matters more than the walk. Per-connection logging (`medium` and `high`, key `T1071_connect4`) is the largest source: at about 30K connects a second the backlog overflowed and over 100K events were lost, and with the `edge` overlay none were. `--backlog_wait_time 0` makes an overflow drop events rather than stall every process on the host.
 
@@ -70,7 +93,7 @@ Event volume matters more than the walk. Per-connection logging (`medium` and `h
 
 Most mistakes here leave the ruleset loading cleanly while a detection goes quiet, so the kernel test is the check that counts.
 
-1. Give every new syscall a line to itself. An unknown syscall name makes `auditctl` drop the whole rule, and the `-i` at the top hides the error, so appending to a working `-S` list deletes that rule on older kernels.
+1. Check every syscall name is in the x86_64 or aarch64 table (`ausyscall aarch64 --dump`). The role drops the names a host lacks before writing the file, because `auditctl` drops a whole rule over one unknown name. So `-S unlink -S unlinkat` covers x64 and arm64 in one line.
 2. Key it `T<MITRE technique>_<what>`, such as `T1059_root_tmp`. Use a plain name, such as `audittools`, where no technique fits.
 3. Keep every existing key. Keys are the output contract: rename one and every search and alert on it goes blind.
 4. Where a SigmaHQ rule matches on a key name, put both keys on the rule (`-k T1071_connect4 -k network_connect_4`). Two keys cost nothing extra.

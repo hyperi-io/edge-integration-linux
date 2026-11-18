@@ -14,17 +14,17 @@ import harness
 SELECTIONS = [
     (
         {"hyperi_audit_level": "low"},
-        ["T1059_root_tmp", "T1055.008_ptrace", "T1611_shocker"],
-        ["T1071_connect4", "T1011_socket", "T1548.001_priv_ctx_exec"],
+        ["T1059_root_tmp", "T1611_shocker", "T1548.001_setuid_set", "T1556_pam"],
+        ["T1071_connect4", "T1068_chroot", "T1548.001_priv_ctx_exec"],
     ),
     (
         {"hyperi_audit_level": "medium"},
-        ["T1071_connect4", "T1556_pam", "T1222_perm_mod"],
-        ["T1011_socket", "T1548.001_priv_ctx_exec", "T1505.003_webshell"],
+        ["T1071_connect4", "T1222_perm_mod", "T1068_chroot", "T1542.003_boot"],
+        ["T1011_socket", "T1059_session_exec", "T1505.003_webshell"],
     ),
     (
         {"hyperi_audit_level": "high"},
-        ["T1071_connect4", "T1011_socket", "T1548.001_priv_ctx_exec", "T1059_exclude"],
+        ["T1011_socket", "T1059_exclude", "T1059_session_exec"],
         ["T1505.003_webshell", "T1611_runtime_ignore"],
     ),
     (
@@ -104,6 +104,12 @@ INVALID = [
     ({"hyperi_audit_port_syslog": "70000"}, "must be a TCP port"),
     ({"hyperi_audit_port_syslog": "12205x"}, "must be a TCP port"),
     ({"hyperi_audit_receiver_address": "a,b"}, "must be a host name or IP address"),
+    (
+        {"hyperi_audit_receiver_address": "collector.example:6514"},
+        "must be a host name or IP address",
+    ),
+    ({"hyperi_audit_receiver_address": "-r.example"}, "must be a host name or IP"),
+    ({"hyperi_audit_user_watch_max": "-1"}, "must be a whole number"),
     ({"hyperi_audit_receiver_address": ""}, "receiver address is not set"),
 ]
 

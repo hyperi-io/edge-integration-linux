@@ -1,0 +1,77 @@
+---
+# What the ruleset template needs from the host. test/render.yml includes this too.
+
+- name: List the accounts
+  ansible.builtin.getent:
+    database: passwd
+
+# Root has its own rules. Any other account with a login shell and a real home
+# gets per-user watches, up to hyperi_audit_user_watch_max accounts.
+# noqa: the linter renders this with a mock cap that is not an int.
+- name: Record the login accounts' home directories # noqa: jinja[invalid]
+  ansible.builtin.set_fact:
+    hyperi_audit_user_homes: >-
+      {{ ((ansible_facts['getent_passwd'] | default({})).values()
+         | rejectattr('1', 'equalto', '0')
+         | rejectattr('5', 'search', '(nologin|false|sync|shutdown|halt)$')
+         | rejectattr('4', 'in', ['', '/', '/nonexistent'])
+         | sort(attribute='1')
+         | map(attribute='4') | unique
+         | list)[:(hyperi_audit_user_watch_max | int)] }}
+
+# One call for all of them: find -L follows symlinked directories such as EL's
+# /etc/init.d, and prints only the paths that are directories here.
+- name: Check which watched and home directories exist
+  ansible.builtin.command:
+    argv: "{{ ['find', '-L'] + hyperi_audit_probe_dirs + ['-maxdepth', '0', '-type', 'd'] }}"
+  register: hyperi_audit_dir_find
+  changed_when: false
+  failed_when: false
+  vars:
+    hyperi_audit_probe_dirs: "{{ hyperi_audit_watch_dirs + hyperi_audit_user_homes + hyperi_audit_user_homes | map('regex_replace', '$', '/.ssh') | list }}"
+
+- name: Record the directories that exist
+  ansible.builtin.set_fact:
+    hyperi_audit_present_dirs: "{{ hyperi_audit_dir_find.stdout_lines }}"
+
+# The template drops each -S name these tables lack. An arch with no entry in
+# hyperi_audit_syscall_tables gets the ruleset as written.
+- name: Read the syscall tables auditctl uses here
+  ansible.builtin.command:
+    argv: [ausyscall, "{{ item.value }}", --dump]
+  loop: "{{ hyperi_audit_syscall_tables[ansible_facts['architecture']] | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: hyperi_audit_ausyscall
+  changed_when: false
+  failed_when: false
+
+- name: Record the syscall tables
+  ansible.builtin.set_fact:
+    hyperi_audit_syscalls: >-
+      {{ hyperi_audit_syscalls | default({})
+         | combine({item.item.key: item.stdout_lines | map('regex_replace', '^\d+\s+', '') | list}) }}
+  loop: "{{ hyperi_audit_ausyscall.results | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0) | list }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+
+# An exec watch on a symlink never fires, so resolve each watched executable.
+- name: List the executables the ruleset watches
+  ansible.builtin.set_fact:
+    hyperi_audit_exec_watched: >-
+      {{ lookup('ansible.builtin.template',
+                hyperi_audit_template_src | default(role_path ~ '/templates/hyperi-audit.rules.j2'))
+         | hyperi_audit_exec_paths }}
+  vars:
+    hyperi_audit_exec_links: {}
+
+# -m prints one line per path, whether or not it exists.
+- name: Resolve the watched executables
+  ansible.builtin.command:
+    argv: "{{ ['readlink', '-m', '--'] + hyperi_audit_exec_watched }}"
+  register: hyperi_audit_readlink
+  changed_when: false
+
+- name: Record where each watched executable resolves to
+  ansible.builtin.set_fact:
+    hyperi_audit_exec_links: "{{ dict(hyperi_audit_exec_watched | zip(hyperi_audit_readlink.stdout_lines)) }}"

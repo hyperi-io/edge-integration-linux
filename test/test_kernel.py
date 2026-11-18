@@ -81,26 +81,46 @@ DETECTIONS = [
         "python3 -c 'import socket; socket.socket()'",
     ),
     ("T1548.001_priv_ctx_exec", "high", "low medium", "sudo /usr/bin/id"),
+    (
+        "T1548.001_setuid_set",
+        "low medium high",
+        "",
+        'f=$(mktemp); chmod 4755 "$f"; rm -f "$f"',
+    ),
+    (
+        "T1078_mount",
+        "low medium high",
+        "",
+        'd=$(mktemp -d); sudo mount -t tmpfs hp "$d"; sudo umount "$d"; rmdir "$d"',
+    ),
+    (
+        "T1556_pam",
+        "low medium high",
+        "",
+        "sudo touch /etc/pam.d/hyperi-probe; sudo rm -f /etc/pam.d/hyperi-probe",
+    ),
+    ("T1068_chroot", "medium high", "low", "sudo chroot / /usr/bin/true"),
+    ("T1611_namespace", "medium high", "low", "sudo unshare --mount /usr/bin/true"),
+    (
+        "T1542.003_boot",
+        "medium high",
+        "low",
+        "sudo touch /boot/hyperi-probe; sudo rm -f /boot/hyperi-probe",
+    ),
+    ("T1685_sysctl", "medium high", "low", "sudo sysctl -n kernel.ostype"),
+    ("T1546.004_shellprofile", "high", "low medium", "touch ~/.profile"),
+    (
+        "T1098.004_ssh_keys",
+        "medium high",
+        "low",
+        "mkdir -p ~/.ssh; touch ~/.ssh/authorized_keys",
+    ),
+    # python3 is a symlink on every target, so this proves the role resolved it.
+    ("T1059.006_python", "high", "low medium", "python3 -c 0"),
+    ("T1059_session_exec", "high", "low medium", "/usr/bin/basename x"),
 ]
 
 PATH_FIELD = re.compile(r"(?:^-w |-F (?:path|dir|exe)=)(\S+)")
-
-# Syscalls the ruleset names that an older auditctl or kernel may not know.
-NEWER_SYSCALLS = {
-    "execveat",
-    "fchmodat2",
-    "kexec_file_load",
-    "openat2",
-    "pidfd_getfd",
-    "process_vm_readv",
-    "process_vm_writev",
-    "renameat2",
-    "userfaultfd",
-    "io_uring_setup",
-    "memfd_create",
-    "bpf",
-    "finit_module",
-}
 
 
 def sudo(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -133,14 +153,14 @@ def rules(path: Path) -> list[str]:
 def explained(rule: str, error: str) -> bool:
     """Return True when this host lacks what the rule refers to.
 
-    Expected on some distros: a watch whose directory is missing here, an
-    SELinux field without SELinux, or a syscall newer than this auditctl.
+    Expected on some distros: a watch whose directory is missing here, or an
+    SELinux field without SELinux. The role drops syscall names this auditctl
+    does not know, so an unknown one is a failure.
     """
     if "subj_type=" in rule and not Path("/sys/fs/selinux").exists():
         return True
-    unknown = re.search(r"Syscall name unknown: (\S+)", error)
-    if unknown:
-        return unknown.group(1) in NEWER_SYSCALLS
+    if "Syscall name unknown" in error:
+        return False
     m = PATH_FIELD.search(rule)
     if not m:
         return False
@@ -180,6 +200,29 @@ def test_every_rule_loads(level: str, use_cases: list[str], workdir: Path) -> No
     for rule in rules(path):
         result = sudo("auditctl", *rule.split(), check=False)
         if result.returncode != 0 and not explained(rule, result.stderr):
+            unexplained.append(f"{rule}\n    {result.stderr.strip()}")
+    sudo("auditctl", "-D")
+    assert not unexplained, "rules the kernel rejected:\n" + "\n".join(unexplained)
+
+
+@pytest.mark.parametrize("profile", ["low", "medium", "high", "internet"])
+def test_reference_file_loads(profile: str) -> None:
+    """Check a rules/ file loads standalone.
+
+    A syscall some host lacks has a line of its own, so only a one-syscall line
+    may fail on an unknown name. A merged line holds only portable names.
+    """
+    path = harness.HERE.parent / "rules" / f"hyperi-audit-{profile}.rules"
+    sudo("auditctl", "-D")
+    unexplained = []
+    for rule in rules(path):
+        result = sudo("auditctl", *rule.split(), check=False)
+        unknown_syscall = (
+            "Syscall name unknown" in result.stderr and rule.count(" -S ") == 1
+        )
+        if result.returncode != 0 and not (
+            unknown_syscall or explained(rule, result.stderr)
+        ):
             unexplained.append(f"{rule}\n    {result.stderr.strip()}")
     sudo("auditctl", "-D")
     assert not unexplained, "rules the kernel rejected:\n" + "\n".join(unexplained)

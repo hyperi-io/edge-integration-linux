@@ -16,7 +16,14 @@ load() {
 }
 
 count() {
-    # Events for key $1 whose exe is $2.
+    # Events for key $1 whose exe is $2, once auditd has caught up: the log is
+    # in order, so the marker written now lands after them.
+    local marker="settle_${RUN}_${RANDOM}"
+    auditctl -m "${marker}" > /dev/null 2>&1
+    for _ in $(seq 1 50); do
+        ausearch --input-logs -m USER --raw 2> /dev/null | grep -q "${marker}" && break
+        sleep 0.1
+    done
     ausearch --input-logs -k "$1" --raw 2> /dev/null | grep -c "exe=\"$2\"" || true
 }
 
@@ -26,6 +33,9 @@ as_daemon() { systemd-run --quiet --wait -p User=nobody "$@" > /dev/null 2>&1 ||
 report() { printf '%-4s %-60s %s\n' "$1" "$2" "$3"; }
 
 auditctl -e 1 > /dev/null
+# A login gives the user's commands an auid. Without one (a CI runner), set it
+# as login does, so sudo -u children inherit it.
+id -u "${LOGIN_USER}" > /proc/self/loginuid 2> /dev/null || true
 
 # E1: always on the exit list, then never on the inode list for one binary.
 load <<EOF

@@ -11,8 +11,9 @@ The `hyperi_audit` role installs and tunes auditd and rsyslog from the host's di
 - Three cumulative ruleset levels, `low`, `medium` and `high`, keyed by MITRE ATT&CK technique, with SigmaHQ's keys added where its auditd rules match on them.
 - Overlays for web servers, internet-facing hosts and container hosts.
 - Plain TCP by default, with syslog over TLS, RELP, and RELP over TLS as options.
-- A disk-assisted queue per stream, so a receiver outage spools records rather than dropping them.
+- A disk-assisted queue per stream, so a receiver outage spools up to 1 GB of records rather than dropping them.
 - Nothing installed beyond distro packages, and no agent on the host.
+- Each level as a plain auditd rules file in [rules/](rules/), for hosts you manage some other way ([how](docs/rulesets.md#using-a-rules-file-on-its-own)).
 
 EdgeStream Hub is HyperI's syslog receiver (https://hyperi-io.github.io/edgestream-hub/). Any receiver that takes syslog over TCP works.
 

@@ -4,127 +4,203 @@
 # License: Apache-2.0. Copyright (c) 2026 HYPERI PTY LIMITED.
 #
 # LINEAGE. Forked from Neo23x0 (Florian Roth) "Best Practice Auditd
-# Configuration" (Apache-2.0), then merged in turn with the public baselines:
+# Configuration" (Apache-2.0), then progressively merged with the public
+# baselines below. Method, and it matters when reading the changelog: each merge
+# took the DELTA the newer source had that we did not, and replaced our line
+# where the newer source did it better. Roughly every second merge was followed
+# by a performance review, because breadth accrues and CPU does not.
 #   Neo23x0 (Florian Roth) -> ACSC (ASD) OpenSCAP -> NIST -> DISA STIG
 #   -> alphagov/GDS -> US DoD -> SigmaHQ
-# Rules marked "sigma:" exist so a SigmaHQ auditd rule can fire. Detection logic
-# from SigmaHQ (https://github.com/SigmaHQ/sigma), Detection Rule License 1.1.
-# Keys carry MITRE ATT&CK technique ids where mapped. Keys are part of the
-# output contract: rename one and every search on it goes blind.
+# Detection keys carry MITRE ATT&CK technique IDs where mapped. Keys are part
+# of the output contract: rename one and every search on it goes blind.
 #
-# LAYERS. low is the base. medium adds to low, high adds to medium. Overlays
-# (webserver, edge, container-host) add or remove rules for what the host does.
+# SIGMA ALIGNMENT. Where the events feed SigmaHQ rules, a Sigma auditd rule
+# whose event we never emit is a dead detection - it loads, looks like
+# coverage, and never matches. Rules marked "sigma:" below also make a Sigma
+# rule FIREABLE, and each earns its place on its own key without Sigma.
+# Detection logic taken from SigmaHQ (https://github.com/SigmaHQ/sigma),
+# Detection Rule License 1.1 (https://github.com/SigmaHQ/Detection-Rule-License).
 #
-# COST. A syscall walks every rule whose syscall mask includes it. A `-w dir/`
-# watch has every syscall in its mask, about 15 ns on each syscall the host
-# makes. The same watch as `-a always,exit -F arch=b64 -F perm=wa -F dir=` gets
-# a mask of only the syscalls perm= covers, about a quarter of the cost, so
-# directories that exist are written that way. Rules with no -S and no perm=
-# cost every syscall too. File watches hash by inode and cost only the
-# syscalls that touch a path. Within a rule the kernel stops at the first field
-# that fails, so the cheapest, most selective field goes first.
-# test/lab/bench.sh and test/lab/dirform.sh measure this on a real kernel.
+# DO-NOT-MERGE from upstream linux-audit: 10-base-config.rules still ships
+# --backlog_wait_time 60000, the exact host-CPU bug v3.0 fixed, and
+# 20-dont-audit.rules ships its noise suppressors commented out. Treating that
+# file as "the newer source" would reintroduce the throttle.
 #
-# ORDER. The first rule that matches an event decides it, in load order, file
-# watches included. A never rule must come before every always rule it is meant
-# to silence, and the execution rules sit above the excludes so no exclude can
-# hide them. test/lab/semantics.sh checks this on a real kernel.
+# USE. Copy to /etc/audit/rules.d/hyperi-audit.rules and run `augenrules --load`.
+# The final -e 2 locks the rules until reboot. low, medium and high each hold
+# the level below. internet is medium for an internet-facing web server.
+# Levels, measured cost, rule order and history:
+# https://github.com/hyperi-io/edge-integration-linux/blob/main/docs/rulesets.md
 #
-# ADDING A SYSCALL. Give it its own line. An unknown syscall name makes auditctl
-# drop the whole rule, and -i hides that, so appending a new syscall to a
-# working -S list deletes the rule on older kernels.
+# Assumes a 64-bit host (see the 32-bit ABI tripwire). Events are forwarded
+# off-box via rsyslog imfile reading /var/log/audit/audit.log, NOT audisp.
+#
+# Changelog (newest first). Entries below v3.0 were rebuilt from the merge order
+# when the pre-git tracking was retired. (low), (high) and (internet) lines are
+# from the per-profile files before v4.0.
+# v4.0  2026-11-19  One layered template replaces the four profile files.
+#                   INTERNET became the edge overlay. Directory watches use
+#                   -F dir= -F perm= (a quarter of the -w dir/ cost). -S lists
+#                   fitted to each host's syscall table, so arm64 loads. Fixed
+#                   msgtype excludes that never loaded, the setuid-exec rule,
+#                   execveat bypass, docker.sock, shadow writes, setid_fail.
+# v3.3  2026-07-20  Baseline refresh from ACSC/NIST/DISA STIG: AppArmor MAC
+#                   tamper (Ubuntu was a whole-distro blind spot), nsswitch,
+#                   gpasswd/chage, fchmodat2 (own line - modern-kernel chmod),
+#                   open_by_handle_at (own line - Shocker container escape). The
+#                   hyperi_audit_use_case role variable was renamed
+#                   hyperi_audit_profile_override (it replaces the level).
+#       (high)      Also legacy pam.conf.
+# v3.2  2026-07-17  Sigma alignment + baseline refresh. Our events feed a
+#                   pipeline that auto-ingests SigmaHQ rules; dual-key the rules
+#                   Sigma matches by key so its upstream key names sit alongside
+#                   ours. Added dmesg clear/off, ASLR-disable, rsyslog-config,
+#                   setenforce, systemd-run, and the Neo23x0 2026-05 socket
+#                   delta (AF_ALG, raw socket, socket BPF). Fixed: user crontabs
+#                   were watched on the Debian path only.
+#       (high)      Fixed: T1548.001_priv_ctx_exec fired on EVERY daemon
+#                   execve (auid=unset is not != uid).
+# v3.1  2026-07-17  Escalated-execution rules moved ABOVE the excludes: the
+#                   excludes match auid>=1000 + path with no euid scoping, so
+#                   below them `sudo cat /tmp/x` went unlogged. See that block
+#                   for why euid scoping the excludes is the wrong fix
+#                   (auid=unset >= 1000).
+# v3.0  2026-07-16  Host-CPU fix + modernisation.
+#                   - KERNEL CPU FIX: --backlog_wait_time 0 (was 60000). A
+#                     non-zero wait makes the kernel BLOCK/throttle syscalls
+#                     when the backlog fills -> host live-lock / CPU stall.
+#                     0 drops on overflow instead (Auditbeat default; Grubb
+#                     recommendation). Kernel >=3.14; el6 skips it via -i.
+#                   - "-i" moved FIRST so directives/syscalls a given kernel
+#                     does not know (backlog_wait_time, loginuid-immutable,
+#                     filesystem filter, execveat, memfd_create, bpf, setns,
+#                     io_uring, finit_module ...) are skipped, not aborted, on
+#                     el6 (audit 2.4.x / kernel 2.6.32) .. current (audit 3.x).
+#                   - NEW TTPs: eBPF (bpf), namespace/container escape
+#                     (setns/unshare + container runtimes), io_uring,
+#                     setuid/setgid root exec, fileless (memfd_create).
+#                   - FIX: removed the dangling "-F" syntax error on the
+#                     shred/wipe/scrub/dd rules (converted to path watches).
+#                   - EFFICIENCY: dropped the per-binary execute-watch sprawl
+#                     (macOS/VBox/Parallels, full compressor list, generic
+#                     config-mgmt) that duplicated telemetry and bloated the
+#                     kernel filter; kept broad, attributable sensors instead.
+#       (low)       Trimmed to the low-volume high-signal subset.
+#       (internet)  Per-connection connect4/connect6/socket block dropped for
+#                   this edge use-case.
+# v2.9   2025-01-02  MITRE TIDs; non-root high-frequency execve excludes.
+#                    Customer-site perf review.
+# v2.7   2024-11-07  Tiered auditd (low/medium/high) migrated from PaaS.
+#       (internet)   Connection logging off.
+# v2.6   2023-11-08  MITRE merge; virtualisation.
+# v2.5   2023-06-14  US DoD merge.
+# v2.4   2023-03-21  alphagov/GDS (UK Government Digital Service) merge, via
+#                    Neo23x0. Recorded as "GCHQ" until 2026-07-17.
+# v2.3   2022-11-01  Updates, merges and fixes.
+# v2.2.1 2022-03-08  Customer-site perf review + merge.
+# v2.2   2022-01-10  HyperI infra merge.
+# v1.7   2021-09-03  DISA STIG merge.
+# v1.6   2021-06-23  NIST merge.
+# v1.5   2021-06-01  ACSC OpenSCAP merge.
+# v1.4   2021-01-11  Initial fork from Neo23x0.
 {% set lvl = {'low': 1, 'medium': 2, 'high': 3}[hyperi_audit_effective_level] %}
 {% set uc = hyperi_audit_effective_use_cases %}
-{#
-  A directory watch: syscall-scoped where the directory exists, a path watch
-  where it does not (a missing directory cannot take a dir= rule). Every path
-  must be in vars/main.yml, or the render fails on the undefined name.
-#}
-{% macro wdir(path, perm, key) -%}
+{# A dir= rule where the directory exists, else a path watch for its creation. An optional (component) directory gets nothing when absent. Every path must be in vars/main.yml. #}
+{% macro wdir(path, perm, key, optional=false) -%}
 {% if path not in hyperi_audit_watch_dirs %}{{ hyperi_audit_watch_dirs_is_missing_this_path[path] }}{% endif -%}
 {% if path in hyperi_audit_present_dirs | default([]) -%}
 -a always,exit -F arch=b64 -F perm={{ perm }} -F dir={{ path }} -k {{ key }}
-{%- else -%}
+{%- elif not optional -%}
 -w {{ path }}/ -p {{ perm }} -k {{ key }}
 {%- endif %}
 {%- endmacro %}
+{% filter hyperi_audit_fit_syscalls(hyperi_audit_syscalls | default({}), hyperi_audit_exec_links | default({})) %}
 
 ## --- Control ---------------------------------------------------------------
 -D
-## -i first: lines an older kernel or auditctl does not know are skipped, not
-## fatal. It reacts to the running kernel, so it is right per host.
+## Ignore-errors FIRST: a line this kernel or auditctl does not know is
+## skipped, not fatal. It reacts to the real kernel, so do NOT replace it with
+## an auditd-version gate.
 -i
+## Kernel backlog buffer. With wait_time 0 a full backlog drops events, so high
+## gets more headroom.
 -b {{ 16384 if lvl == 3 else 8192 }}
-## 0 drops events when the backlog is full instead of blocking the syscall,
-## which on a busy host stalls every process. Kernel 3.14+.
+## HOST-CPU FIX: 0 drops on overflow instead of blocking the syscall until the
+## backlog drains. Kernel >=3.14; el6 skips it via -i.
 --backlog_wait_time 0
+## Anti-tamper on auid. Kernel >=3.4; el6 skips.
 --loginuid-immutable
+## Failure mode: 1 = printk (0 silent, 2 panic).
 -f 1
 
 ## --- Execution from writable or unusual locations ---------------------------
--a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/tmp           -k T1059_root_tmp
--a always,exit -F arch=b64 -S execveat -F euid=0 -F dir=/tmp           -k T1059_root_tmp
--a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/var/tmp       -k T1059_root_vartmp
--a always,exit -F arch=b64 -S execveat -F euid=0 -F dir=/var/tmp       -k T1059_root_vartmp
--a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/dev/shm       -k T1059_root_devshm
--a always,exit -F arch=b64 -S execveat -F euid=0 -F dir=/dev/shm       -k T1059_root_devshm
--a always,exit -F arch=b64 -S execve -F dir=/dev/shm                 -k T1059_devshm_exec
--a always,exit -F arch=b64 -S execveat -F dir=/dev/shm                 -k T1059_devshm_exec
--a always,exit -F arch=b64 -S execve -F euid=0 -C uid!=euid          -k T1059_setuid_exec
--a always,exit -F arch=b64 -S execveat -F euid=0 -C uid!=euid        -k T1059_setuid_exec
+## MUST stay ABOVE the excludes: first match wins, and the excludes match
+## auid+path with no euid scoping, so below them `sudo cat /tmp/x` goes
+## unlogged. Do not euid-scope the excludes instead: auid=unset is >=1000.
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -F dir=/tmp           -k T1059_root_tmp
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -F dir=/var/tmp       -k T1059_root_vartmp
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -F dir=/dev/shm       -k T1059_root_devshm
+-a always,exit -F arch=b64 -S execve -S execveat -F dir=/dev/shm                 -k T1059_devshm_exec
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -C uid!=euid          -k T1059_setuid_exec
+## A setuid or setgid bit set (mode & 06000), here so the /dev/shm exclude cannot hide it.
+-a always,exit -F arch=b64 -S chmod -S fchmod -F a1&0xC00 -k T1548.001_setuid_set
+-a always,exit -F arch=b64 -S fchmodat -S fchmodat2 -F a2&0xC00 -k T1548.001_setuid_set
+## A connect to the Docker socket: root on the host. Above the web server excludes.
+-a always,exit -F arch=b64 -S connect -F path=/run/docker.sock -k T1610_docker_sock
 {% if lvl >= 2 %}
--a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/home          -k T1059_root_home
--a always,exit -F arch=b64 -S execveat -F euid=0 -F dir=/home          -k T1059_root_home
--a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/usr/local/bin -k T1059_root_localbin
--a always,exit -F arch=b64 -S execveat -F euid=0 -F dir=/usr/local/bin -k T1059_root_localbin
--a always,exit -F arch=b64 -S execve -F euid=0 -F dir=/opt           -k T1059_root_opt
--a always,exit -F arch=b64 -S execveat -F euid=0 -F dir=/opt           -k T1059_root_opt
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -F dir=/home          -k T1059_root_home
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -F dir=/usr/local/bin -k T1059_root_localbin
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -F dir=/opt           -k T1059_root_opt
 -a always,exit -F arch=b64 -S execve -F egid=0 -C gid!=egid          -k T1059_setgid_exec
 {% endif %}
 {% if lvl >= 3 %}
--a always,exit -F arch=b64 -S execve -F dir=/tmp                     -k T1059_tmp_exec
--a always,exit -F arch=b64 -S execveat -F dir=/tmp                     -k T1059_tmp_exec
--a always,exit -F arch=b64 -S execve -F dir=/var/tmp                 -k T1059_tmp_exec
--a always,exit -F arch=b64 -S execveat -F dir=/var/tmp                 -k T1059_tmp_exec
+-a always,exit -F arch=b64 -S execve -S execveat -F dir=/tmp                     -k T1059_tmp_exec
+-a always,exit -F arch=b64 -S execve -S execveat -F dir=/var/tmp                 -k T1059_tmp_exec
 {% endif %}
 {% if 'webserver' in uc %}
-## Every command a web server account runs: the webshell and RCE signal.
+## Code run from a web root: a dropped binary, not a script the server interprets.
+{% for d in ['/var/www', '/srv/www', '/srv/http', '/usr/share/nginx/html'] if d in hyperi_audit_present_dirs | default([]) %}
+-a always,exit -F arch=b64 -S execve -S execveat -F dir={{ d }} -k T1505.003_webroot_exec
+{% endfor %}
+## Web server accounts' commands: the webshell/RCE signal. Above the excludes,
+## which would otherwise hide the cat/ls/whoami a webshell runs first.
 ## sigma: syscall/lnx_auditd_web_rce.yml
 {% for uid in hyperi_audit_webserver_uids | default([]) %}
--a always,exit -F arch=b64 -S execve   -F euid={{ uid }} -k T1505.003_webshell
--a always,exit -F arch=b64 -S execveat -F euid={{ uid }} -k T1505.003_webshell
+-a always,exit -F arch=b64 -S execve -S execveat   -F euid={{ uid }} -k T1505.003_webshell
 {% endfor %}
 {% endif %}
 
 ## --- Noise excludes ---------------------------------------------------------
-## One msgtype per line. The exclude list takes no key.
+## As early as possible, but BELOW the execution rules. One msgtype per line,
+## and no key on the exclude list: auditctl rejects the line.
 {% if lvl == 1 %}
 -a always,exclude -F msgtype=CWD
 {% endif %}
 -a always,exclude -F msgtype=EOE
 -a always,exclude -F msgtype=CRYPTO_KEY_USER
+## AVC denials stay logged (they flag exploit attempts). For a noisy SELinux host:
+# -a always,exclude -F msgtype=AVC
+## Daemon self-noise
 -a never,user -F subj_type=crond_t -k T1053_cron_ignore
+{% if lvl >= 2 %}
 ## Shared memory and LVM lock churn, for the file-change syscalls only, so
 ## execution from /dev/shm stays visible.
--a never,exit -F arch=b64 -S rmdir -S unlink -S unlinkat -S rename -S renameat -F dir=/dev/shm -k T1135_sharedmem_ignore
--a never,exit -F arch=b64 -S renameat2 -F dir=/dev/shm -k T1135_sharedmem_ignore
--a never,exit -F arch=b64 -S chmod -S fchmodat -S chown -S fchownat -S lchown -F dir=/dev/shm -k T1135_sharedmem_ignore
--a never,exit -F arch=b64 -S fchmodat2 -F dir=/dev/shm -k T1135_sharedmem_ignore
--a never,exit -F arch=b64 -S rmdir -S unlink -S unlinkat -S rename -S renameat -F dir=/var/lock/lvm -k exclude_locklvm
--a never,exit -F arch=b64 -S renameat2 -F dir=/var/lock/lvm -k exclude_locklvm
+-a never,exit -F arch=b64 -S rmdir -S unlink -S unlinkat -S rename -S renameat -S renameat2 -S chmod -S fchmodat -S chown -S fchownat -S lchown -S fchmodat2 -F dir=/dev/shm -k T1135_sharedmem_ignore
+-a never,exit -F arch=b64 -S rmdir -S unlink -S unlinkat -S rename -S renameat -S renameat2 -F dir=/var/lock/lvm -k exclude_locklvm
+{% endif %}
+## Kernel tracing pseudo-filesystems (filesystem filter: newer kernels; el6/el7 skip)
 -a never,filesystem -F fstype=tracefs -k exclude_tracefs
 -a never,filesystem -F fstype=debugfs -k exclude_debugfs
 {% if lvl >= 2 %}
 ## Time daemons call adjtimex every few seconds.
--a never,exit -F arch=b64 -S adjtimex -F exe=/usr/sbin/chronyd -k T1099_timesync_ignore
--a never,exit -F arch=b64 -S adjtimex -F exe=/usr/sbin/ntpd -k T1099_timesync_ignore
--a never,exit -F arch=b64 -S adjtimex -F exe=/usr/lib/systemd/systemd-timesyncd -k T1099_timesync_ignore
--a never,exit -F arch=b64 -S adjtimex -F exe=/usr/bin/vmtoolsd -k T1099_timesync_ignore
+-a never,exit -F arch=b64 -S adjtimex -F exe=/usr/sbin/chronyd -k T1070.006_timesync_ignore
+-a never,exit -F arch=b64 -S adjtimex -F exe=/usr/sbin/ntpd -k T1070.006_timesync_ignore
+-a never,exit -F arch=b64 -S adjtimex -F exe=/usr/lib/systemd/systemd-timesyncd -k T1070.006_timesync_ignore
+-a never,exit -F arch=b64 -S adjtimex -F exe=/usr/bin/vmtoolsd -k T1070.006_timesync_ignore
 {% endif %}
 {% if lvl >= 3 %}
-## Common commands in logged-in sessions, which the privilege-context rule below
-## would otherwise log on every sudo. auid!=unset keeps daemons and web server
-## accounts out of the exclude.
+## Common session commands the privilege-context rule would log on every sudo.
+## auid!=unset keeps daemons and web server accounts out of the exclude.
 -a never,exit -F arch=b64 -S execve -F auid!=unset -F auid>=1000 -F path=/usr/bin/grep   -F perm=x -k T1059_exclude
 -a never,exit -F arch=b64 -S execve -F auid!=unset -F auid>=1000 -F path=/usr/bin/sleep  -F perm=x -k T1059_exclude
 -a never,exit -F arch=b64 -S execve -F auid!=unset -F auid>=1000 -F path=/usr/bin/ls     -F perm=x -k T1059_exclude
@@ -138,12 +214,9 @@
 {% endif %}
 {% if 'container-host' in uc %}
 ## The runtime's own namespace, mount and BPF calls on every container start.
--a never,exit -F arch=b64 -S setns -S unshare -S mount -S umount2 -S bpf -F exe=/usr/bin/runc -k T1611_runtime_ignore
--a never,exit -F arch=b64 -S setns -S unshare -S mount -S umount2 -S bpf -F exe=/usr/bin/crun -k T1611_runtime_ignore
--a never,exit -F arch=b64 -S setns -S unshare -S mount -S umount2 -S bpf -F exe=/usr/bin/containerd -k T1611_runtime_ignore
--a never,exit -F arch=b64 -S setns -S unshare -S mount -S umount2 -S bpf -F exe=/usr/bin/dockerd -k T1611_runtime_ignore
--a never,exit -F arch=b64 -S setns -S unshare -S mount -S umount2 -S bpf -F exe=/usr/bin/conmon -k T1611_runtime_ignore
--a never,exit -F arch=b64 -S setns -S unshare -S mount -S umount2 -S bpf -F pid=1 -k T1611_runtime_ignore
+{% for exe in ['-F exe=/usr/bin/runc', '-F exe=/usr/bin/crun', '-F exe=/usr/bin/containerd', '-F exe=/usr/bin/dockerd', '-F exe=/usr/bin/conmon', '-F pid=1'] %}
+-a never,exit -F arch=b64 -S setns -S unshare -S pivot_root -S mount -S umount2 -S fsopen -S fsconfig -S fsmount -S move_mount -S open_tree -S mount_setattr -S bpf {{ exe }} -k T1611_runtime_ignore
+{% endfor %}
 {% endif %}
 {% if 'webserver' in uc %}
 ## Web server accounts connect to their backends on every request.
@@ -154,14 +227,14 @@
 
 ## --- Audit system self-protection ------------------------------------------
 {{ wdir('/var/log/audit', 'wra', 'T1005_auditlog') }}
-{{ wdir('/etc/audit', 'wa', 'auditconfig') }}
-{{ wdir('/etc/audisp', 'wa', 'audispconfig') }}
--w /sbin/auditctl  -p x   -k audittools
--w /sbin/auditd    -p x   -k audittools
--w /usr/sbin/auditd -p x  -k audittools
--w /usr/sbin/augenrules -p x -k audittools
+{{ wdir('/etc/audit', 'wa', 'T1685.004_auditconfig -k auditconfig') }}
+{{ wdir('/etc/audisp', 'wa', 'T1685.004_audispconfig -k audispconfig', optional=true) }}
+-w /sbin/auditctl  -p x   -k T1685.004_audittools -k audittools
+-w /sbin/auditd    -p x   -k T1685.004_audittools -k audittools
+-w /usr/sbin/auditd -p x  -k T1685.004_audittools -k audittools
+-w /usr/sbin/augenrules -p x -k T1685.004_audittools -k audittools
 {% if lvl >= 2 %}
--w /etc/libaudit.conf -p wa -k auditconfig
+-w /etc/libaudit.conf -p wa -k T1685.004_auditconfig -k auditconfig
 -a always,exit -F path=/usr/sbin/ausearch    -F perm=x -k T1005_auditlog
 -a always,exit -F path=/usr/sbin/aureport    -F perm=x -k T1005_auditlog
 -a always,exit -F path=/usr/sbin/aulast      -F perm=x -k T1005_auditlog
@@ -172,30 +245,24 @@
 ## --- 32-bit ABI tripwire ----------------------------------------------------
 ## Every other rule is b64. These catch a 32-bit process doing what those
 ## rules watch, without logging every syscall a legitimate 32-bit app makes.
--a always,exit -F arch=b32 -S execve -F key=32bit-abi
--a always,exit -F arch=b32 -S open -F key=32bit-abi
--a always,exit -F arch=b32 -S openat -F key=32bit-abi
--a always,exit -F arch=b32 -S socketcall -F key=32bit-abi
--a always,exit -F arch=b32 -S connect -F key=32bit-abi
--a always,exit -F arch=b32 -S ptrace -F key=32bit-abi
--a always,exit -F arch=b32 -S init_module -F key=32bit-abi
--a always,exit -F arch=b32 -S finit_module -F key=32bit-abi
--a always,exit -F arch=b32 -S setuid32 -F key=32bit-abi
--a always,exit -F arch=b32 -S personality -F key=32bit-abi
+{% if lvl >= 2 %}
+## execve, open and connect fire on every call a 32-bit app makes.
+-a always,exit -F arch=b32 -S execve -S open -S openat -S socketcall -S connect -F key=32bit-abi
+{% endif %}
+-a always,exit -F arch=b32 -S ptrace -S init_module -S finit_module -S setuid32 -S personality -F key=32bit-abi
 
 ## --- Kernel-level techniques (rare syscalls, cheap) -------------------------
 -a always,exit -F arch=b64 -S bpf -k T1055_ebpf
 -a always,exit -F arch=b64 -S memfd_create -k T1620_memfd
--a always,exit -F arch=b64 -S kexec_load -k T1014_kexec
--a always,exit -F arch=b64 -S kexec_file_load -k T1014_kexec
-## open_by_handle_at resolves a file by handle and bypasses every path rule
-## (the Shocker container escape).
+-a always,exit -F arch=b64 -S kexec_load -S kexec_file_load -k T1014_kexec
+## Shocker container escape: it opens a file by handle, so no path rule sees it.
+## Not auid-scoped: it runs from a container, auid unset.
 -a always,exit -F arch=b64 -S open_by_handle_at -k T1611_shocker
 -a always,exit -F arch=b64 -S process_vm_writev -k T1055_process_vm
 -a always,exit -F arch=b64 -S process_vm_readv -k T1003.007_process_vm
 {% if lvl >= 2 %}
--a always,exit -F arch=b64 -S setns -S unshare -k T1611_namespace
--a always,exit -F arch=b64 -S io_uring_setup -k T1562_io_uring
+-a always,exit -F arch=b64 -S setns -S unshare -S pivot_root -k T1611_namespace
+-a always,exit -F arch=b64 -S io_uring_setup -k T1685_io_uring -k T1562_io_uring
 {% endif %}
 {% if lvl >= 3 %}
 -a always,exit -F arch=b64 -S pidfd_getfd -k T1055_pidfd
@@ -210,12 +277,15 @@
 -w /etc/modprobe.conf -p wa -k T1547.006_mod
 -w /etc/modules -p wa -k T1547.006_mod
 {{ wdir('/etc/modprobe.d', 'wa', 'T1547.006_mod') }}
+## PAM modules: a dropped or patched module is a credential backdoor (Plague, 2025).
+{% for pam in ['/usr/lib64/security', '/usr/lib/security', '/usr/lib/x86_64-linux-gnu/security', '/usr/lib/aarch64-linux-gnu/security'] if pam in hyperi_audit_present_dirs | default([]) %}
+{{ wdir(pam, 'wa', 'T1556.003_pam_module') }}
+{% endfor %}
 {% if lvl >= 2 %}
 -w /etc/sysctl.conf -p wa -k T1547_sysctl
-{{ wdir('/etc/modules-load.d', 'wa', 'T1547.006_mod') }}
-{{ wdir('/usr/lib64/security', 'wa', 'T1556.003_pam_module') }}
-{{ wdir('/usr/lib/x86_64-linux-gnu/security', 'wa', 'T1556.003_pam_module') }}
 {{ wdir('/etc/sysctl.d', 'wa', 'T1547_sysctl') }}
+-w /usr/sbin/sysctl -p x -k T1685_sysctl
+{{ wdir('/etc/modules-load.d', 'wa', 'T1547.006_mod') }}
 {% endif %}
 
 ## --- Time ------------------------------------------------------------------
@@ -232,7 +302,8 @@
 {{ wdir('/etc/cron.daily', 'wa', 'T1053.003_cron') }}
 {{ wdir('/etc/cron.hourly', 'wa', 'T1053.003_cron') }}
 -w /etc/crontab       -p wa -k T1053.003_cron
-## Covers Debian's crontabs/ subdirectory and EL's files directly in it.
+## User crontabs: Debian keeps them in /var/spool/cron/crontabs/, EL in
+## /var/spool/cron/. One rule on /var/spool/cron covers both.
 {{ wdir('/var/spool/cron', 'wa', 'T1053.003_cron') }}
 -w /etc/inittab -p wa -k T1037_init
 {{ wdir('/etc/init.d', 'wa', 'T1037_init') }}
@@ -241,10 +312,15 @@
 {% if lvl == 1 %}
 {{ wdir('/etc/systemd/system', 'wa', 'T1543.002_systemd') }}
 {{ wdir('/usr/lib/systemd/system', 'wa', 'T1543.002_systemd') }}
+{{ wdir('/etc/systemd/system-generators', 'wa', 'T1543.002_systemd') }}
+{{ wdir('/usr/local/lib/systemd/system-generators', 'wa', 'T1543.002_systemd') }}
 {% else %}
 {{ wdir('/etc/systemd', 'wa', 'T1543.002_systemd') }}
 {{ wdir('/usr/lib/systemd', 'wa', 'T1543.002_systemd') }}
+{{ wdir('/usr/local/lib/systemd', 'wa', 'T1543.002_systemd') }}
 {{ wdir('/run/systemd/system', 'wa', 'T1543.002_systemd') }}
+## Kernel, initramfs and bootloader. Only package updates write here.
+{{ wdir('/boot', 'wa', 'T1542.003_boot') }}
 -w /etc/cron.allow -p wa -k T1053.003_cron
 -w /etc/cron.deny  -p wa -k T1053.003_cron
 {{ wdir('/etc/cron.monthly', 'wa', 'T1053.003_cron') }}
@@ -254,14 +330,16 @@
 -a always,exit -F arch=b64 -F path=/usr/bin/at      -F perm=x -F auid!=unset -F auid>=1000 -k T1053.002_at
 -w /etc/at.allow -p wa -k T1053.002_at
 -w /etc/at.deny  -p wa -k T1053.002_at
-{{ wdir('/var/spool/at', 'wa', 'T1053.002_at') }}
-{{ wdir('/etc/init', 'wa', 'T1037_init') }}
+{{ wdir('/var/spool/at', 'wa', 'T1053.002_at', optional=true) }}
+{{ wdir('/etc/init', 'wa', 'T1037_init', optional=true) }}
 -w /sbin/init   -p wa -k T1037_init
-{{ wdir('/etc/update-motd.d', 'wa', 'T1037_motd') }}
+{{ wdir('/etc/update-motd.d', 'wa', 'T1037_motd', optional=true) }}
 {{ wdir('/etc/udev/rules.d', 'wa', 'T1546.017_udev') }}
+{{ wdir('/usr/lib/udev/rules.d', 'wa', 'T1546.017_udev') }}
+{{ wdir('/run/udev/rules.d', 'wa', 'T1546.017_udev') }}
 {% endif %}
 {% if lvl >= 3 %}
-{{ wdir('/etc/xdg/autostart', 'wa', 'T1547.013_autostart') }}
+{{ wdir('/etc/xdg/autostart', 'wa', 'T1547.013_autostart', optional=true) }}
 {% endif %}
 
 ## --- Accounts, sudo, credentials -------------------------------------------
@@ -271,33 +349,44 @@
 -w /usr/sbin/useradd  -p x -k T1136_account
 -w /usr/sbin/userdel  -p x -k T1136_account
 -w /usr/sbin/usermod  -p x -k T1136_account
--w /etc/group   -p wa -k T1087.001_localgroup
--w /etc/passwd  -p wa -k T1087.001_localuser
+-w /etc/group   -p wa -k T1087.001_localgroup -k T1098_account
+-w /etc/passwd  -p wa -k T1087.001_localuser -k T1098_account
 -w /etc/gshadow -k T1087.001_shadow
 ## Authentication reads shadow on every login, sudo and cron job. Those readers
 ## are dropped first, which leaves any other process reading it.
--a never,exit -F path=/etc/shadow -F exe=/usr/sbin/sshd -k T1087.001_shadow_ignore
--a never,exit -F path=/etc/shadow -F exe=/usr/sbin/cron -k T1087.001_shadow_ignore
--a never,exit -F path=/etc/shadow -F exe=/usr/sbin/crond -k T1087.001_shadow_ignore
--a never,exit -F path=/etc/shadow -F exe=/usr/sbin/unix_chkpwd -k T1087.001_shadow_ignore
--a never,exit -F path=/etc/shadow -F exe=/usr/bin/sudo -k T1087.001_shadow_ignore
--a never,exit -F path=/etc/shadow -F exe=/usr/bin/su -k T1087.001_shadow_ignore
--a never,exit -F path=/etc/shadow -F exe=/usr/bin/login -k T1087.001_shadow_ignore
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/sbin/sshd -k T1087.001_shadow_ignore
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/sbin/cron -k T1087.001_shadow_ignore
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/sbin/crond -k T1087.001_shadow_ignore
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/sbin/unix_chkpwd -k T1087.001_shadow_ignore
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/bin/sudo -k T1087.001_shadow_ignore
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/bin/su -k T1087.001_shadow_ignore
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/bin/login -k T1087.001_shadow_ignore
 -w /etc/shadow  -p r -k T1087.001_shadow
 -w /etc/shadow  -p wa -k T1098_shadow_write
+## nsswitch.conf picks the passwd/shadow backend: repointing it bypasses auth.
 -w /etc/nsswitch.conf -p wa -k T1556_nsswitch
 -w /etc/environment -p wa -k T1546_environment
 -w /bin/su -p x -k T1548.003_su
 -w /usr/bin/sudo -p x -k T1548.003_sudo
 -w /usr/bin/pkexec -p x -k T1068_CVE_2021_4034
+{{ wdir('/etc/pam.d', 'wa', 'T1556_pam') }}
+## Legacy single-file PAM config, still used by older and minimal systems.
+-w /etc/pam.conf -p wa -k T1556_pam
 {% if lvl >= 2 %}
 -w /usr/sbin/setcap -p x -k T1548_setcap
+## polkit rules grant root actions without sudo.
+{{ wdir('/etc/polkit-1', 'wa', 'T1548_polkit', optional=true) }}
+## Domain authentication: repointing Kerberos or SSSD bypasses the directory.
+-w /etc/krb5.conf -p wa -k T1556_authconfig
+{{ wdir('/etc/krb5.conf.d', 'wa', 'T1556_authconfig', optional=true) }}
+{{ wdir('/etc/sssd', 'wa', 'T1556_authconfig', optional=true) }}
 {% endif %}
 {% if lvl >= 2 %}
 -w /usr/sbin/groupadd -p x -k T1136_account
 -w /usr/sbin/groupmod -p x -k T1136_account
 -w /usr/sbin/addgroup -p x -k T1136_account
 -w /usr/sbin/adduser  -p x -k T1136_account
+## gpasswd and chage: account changes the useradd and group* watches miss.
 -a always,exit -F arch=b64 -F path=/usr/bin/gpasswd -F perm=x -F auid!=unset -F auid>=1000 -k T1136_account
 -a always,exit -F arch=b64 -F path=/usr/bin/chage   -F perm=x -F auid!=unset -F auid>=1000 -k T1098_account
 -w /etc/security/opasswd -k T1087.001_opasswd
@@ -307,8 +396,6 @@
 -a always,exit -F arch=b64 -F perm=rwa -F uid=0 -F auid!=unset -F auid>=1000 -F dir=/home -C auid!=obj_uid -k T1548.003_power_abuse
 -w /usr/bin/dbus-send -p x -k T1068_CVE_2021_3560
 -w /usr/bin/gdbus -p x -k T1068_CVE_2021_3560
-{{ wdir('/etc/pam.d', 'wa', 'T1556_pam') }}
--w /etc/pam.conf -p wa -k T1556_pam
 {% endif %}
 {% if lvl >= 3 %}
 -w /etc/security/limits.conf -p wa -k T1556_pam
@@ -318,10 +405,7 @@
 
 ## --- Permission changes from a session -------------------------------------
 {% if lvl >= 2 %}
--a always,exit -F arch=b64 -S chmod -S fchmod -S fchmodat -F auid!=unset -F auid>=1000 -k T1222_perm_mod
--a always,exit -F arch=b64 -S fchmodat2 -F auid!=unset -F auid>=1000 -k T1222_perm_mod
--a always,exit -F arch=b64 -S chown -S fchown -S fchownat -S lchown -F auid!=unset -F auid>=1000 -k T1222_perm_mod
--a always,exit -F arch=b64 -S setxattr -S lsetxattr -S fsetxattr -S removexattr -S lremovexattr -S fremovexattr -F auid!=unset -F auid>=1000 -k T1222_perm_mod
+-a always,exit -F arch=b64 -S chmod -S fchmod -S fchmodat -S fchmodat2 -S chown -S fchown -S fchownat -S lchown -S setxattr -S lsetxattr -S fsetxattr -S removexattr -S lremovexattr -S fremovexattr -F auid!=unset -F auid>=1000 -k T1222_perm_mod
 {% endif %}
 
 ## --- Code injection and shell persistence ----------------------------------
@@ -350,70 +434,102 @@
 -w /etc/csh.login  -p wa -k T1546.004_shellprofile
 -w /root/.bash_profile -p wa -k T1546.004_rootbash
 -w /root/.profile      -p wa -k T1546.004_rootbash
+## Each login account's authorized_keys, added by the role per host. Every
+## watch costs each syscall about 2 ns, so high alone adds shell start-up files.
+{% for home in hyperi_audit_user_homes | default([]) if home in hyperi_audit_present_dirs | default([]) %}
+{% if home ~ '/.ssh' in hyperi_audit_present_dirs %}
+-w {{ home }}/.ssh/authorized_keys -p wa -k T1098.004_ssh_keys
+{% else %}
+-w {{ home }}/.ssh -p wa -k T1098.004_ssh_keys
+{% endif %}
+{% if lvl >= 3 %}
+{% for rc in ['.bashrc', '.profile'] %}
+-w {{ home }}/{{ rc }} -p wa -k T1546.004_shellprofile
+{% endfor %}
+{% endif %}
+{% endfor %}
 {% endif %}
 
 ## --- Rare, high-signal socket use ------------------------------------------
-## AF_ALG (38) is the kernel crypto API: ransomware that encrypts there leaves
-## no library trace. Not auid-scoped, because ransomware usually runs from a
-## compromised service.
+## Rare, so in low and kept by edge. AF_ALG (a0=38) is the kernel crypto API:
+## ransomware encrypting there leaves no library trace. Not auid-scoped, as
+## ransomware usually runs from a compromised service.
 -a always,exit -F arch=b64 -S socket -F a0=38 -F success=1 -k T1486_af_alg
 -a always,exit -F arch=b64 -S bind -F a2=88 -F success=1 -k T1486_af_alg
 -a always,exit -F arch=b64 -S setsockopt -F a1=279 -F success=1 -k T1486_af_alg
-## Raw packet sockets (AF_PACKET, SOCK_RAW) and SO_ATTACH_FILTER: capture.
+## Raw sockets (AF_PACKET=17, SOCK_RAW=3) - sniffers and covert channels.
 -a always,exit -F arch=b64 -S socket -F a0=17 -F a1=3 -k T1040_raw_socket
+## SO_ATTACH_FILTER (a1=SOL_SOCKET=1, a2=26): a BPF filter on a socket, packet capture.
 -a always,exit -F arch=b64 -S setsockopt -F a1=1 -F a2=26 -k T1040_socket_bpf
 
 ## --- Mounts, devices, host identity, network config ------------------------
 -a always,exit -F arch=b64 -S mknod -S mknodat -k T1546_specialfiles
--a always,exit -F arch=b64 -S mount -S umount2 -F auid!=unset -k T1078_mount
+-a always,exit -F arch=b64 -S mount -S umount2 -S fsopen -S fsconfig -S fsmount -S move_mount -S open_tree -S fspick -S mount_setattr -F auid!=unset -k T1078_mount
 -a always,exit -F arch=b64 -S sethostname -S setdomainname -k T1082_hostname
 -w /etc/hosts -p wa -k T1565_hosts
 {% if lvl >= 2 %}
+## chroot from a session: sudo --chroot (CVE-2025-32463) and jail escapes.
+-a always,exit -F arch=b64 -S chroot -F auid!=unset -F auid>=1000 -k T1068_chroot
+-w /etc/nftables.conf -p wa -k T1686_firewall
+{{ wdir('/etc/iptables', 'wa', 'T1686_firewall', optional=true) }}
+-w /usr/bin/firewall-cmd -p x -k T1686_firewall
+-w /usr/sbin/ufw -p x -k T1686_firewall
 -a always,exit -F arch=b64 -S swapon -S swapoff -F auid!=unset -k T1078_swap
 -w /etc/sysconfig/network -p wa -k T1565_network
-{{ wdir('/etc/sysconfig/network-scripts', 'wa', 'T1565_network') }}
-{{ wdir('/etc/network', 'wa', 'T1565_network') }}
-{{ wdir('/etc/NetworkManager', 'wa', 'T1565_networkmanager') }}
+{{ wdir('/etc/sysconfig/network-scripts', 'wa', 'T1565_network', optional=true) }}
+{{ wdir('/etc/network', 'wa', 'T1565_network', optional=true) }}
+{{ wdir('/etc/NetworkManager', 'wa', 'T1565_networkmanager', optional=true) }}
 -w /etc/issue     -p wa -k T1082_issue
 -w /etc/issue.net -p wa -k T1082_issue
 -w /etc/hostname  -p wa -k T1082_hostname
 {% endif %}
 
 ## --- Defence evasion and anti-forensics ------------------------------------
-## syslog(2) 4, 5 and 6 clear or silence the kernel ring buffer.
+## Documented bypasses of the Neo23x0 config (CheraghiMilad/bypass-Neo23x0-auditd-config).
+## syslog(2) 4 and 5 clear the kernel ring buffer, 6 mutes it.
 ## sigma: lnx_auditd_clean_disable_dmesg_via_syslog.yml
--a always,exit -F arch=b64 -S syslog -F a0=4 -k T1070.002_dmesg_clear
--a always,exit -F arch=b64 -S syslog -F a0=5 -k T1070.002_dmesg_clear
--a always,exit -F arch=b64 -S syslog -F a0=6 -k T1562.006_dmesg_off
-## personality(ADDR_NO_RANDOMIZE). sigma: lnx_auditd_disable_aslr_protection.yml
+-a always,exit -F arch=b64 -S syslog -F a0=4 -k T1685.006_dmesg_clear -k T1070.002_dmesg_clear
+-a always,exit -F arch=b64 -S syslog -F a0=5 -k T1685.006_dmesg_clear -k T1070.002_dmesg_clear
+-a always,exit -F arch=b64 -S syslog -F a0=6 -k T1685_dmesg_off -k T1562.006_dmesg_off
+## personality(ADDR_NO_RANDOMIZE) - disabling ASLR to make an exploit reliable.
+## sigma: lnx_auditd_disable_aslr_protection.yml
 -a always,exit -F arch=b64 -S personality -F a0=0x40000 -k T1055.009_aslr_off
-## The forwarder's own config. sigma: lnx_auditd_logging_config_change.yml
--w /etc/rsyslog.conf -p wa -k T1562.006_logging
-{{ wdir('/etc/rsyslog.d', 'wa', 'T1562.006_logging') }}
-## setenforce writes /sys/fs/selinux/enforce, which no /etc watch sees.
--a always,exit -F arch=b64 -F path=/usr/sbin/setenforce -F perm=x -k T1562.001_selinux
+## Our own transport's config - we forward via rsyslog, so tampering here
+## blinds the pipeline. sigma: lnx_auditd_logging_config_change.yml
+-w /etc/rsyslog.conf -p wa -k T1685_logging -k T1562.006_logging
+{{ wdir('/etc/rsyslog.d', 'wa', 'T1685_logging -k T1562.006_logging') }}
+{{ wdir('/etc/syslog-ng', 'wa', 'T1685_logging', optional=true) }}
+-w /etc/syslog.conf -p wa -k T1685_logging
+## setenforce 0 writes /sys/fs/selinux/enforce, which no /etc watch sees.
+-a always,exit -F arch=b64 -F path=/usr/sbin/setenforce -F perm=x -k T1685_selinux -k T1562.001_selinux
+{% if lvl >= 2 %}
+## Relabelling and policy booleans from a session (STIG).
+{% for tool in ['/usr/bin/chcon', '/usr/sbin/setfiles', '/usr/sbin/semanage', '/usr/sbin/setsebool'] %}
+-a always,exit -F arch=b64 -F path={{ tool }} -F perm=x -F auid!=unset -F auid>=1000 -k T1685_selinux
+{% endfor %}
+{% endif %}
 ## systemd-run reparents a payload to PID 1, away from the caller's auid.
 -a always,exit -F arch=b64 -F path=/usr/bin/systemd-run -F perm=x -F auid!=unset -k T1548_systemd_run
-{{ wdir('/etc/selinux', 'wa', 'T1562.001_selinux') }}
-{{ wdir('/etc/apparmor', 'wa', 'T1562.001_apparmor') }}
-{{ wdir('/etc/apparmor.d', 'wa', 'T1562.001_apparmor') }}
--a always,exit -F arch=b64 -F path=/sbin/apparmor_parser -F perm=x -k T1562.001_apparmor
+{{ wdir('/etc/selinux', 'wa', 'T1685_selinux -k T1562.001_selinux', optional=true) }}
+## AppArmor is the Ubuntu/Debian MAC, which the SELinux watches miss.
+{{ wdir('/etc/apparmor', 'wa', 'T1685_apparmor -k T1562.001_apparmor', optional=true) }}
+{{ wdir('/etc/apparmor.d', 'wa', 'T1685_apparmor -k T1562.001_apparmor', optional=true) }}
+-a always,exit -F arch=b64 -F path=/sbin/apparmor_parser -F perm=x -k T1685_apparmor -k T1562.001_apparmor
 -w /usr/bin/shred -p x -k T1070.004_shred
 -w /usr/bin/wipe  -p x -k T1070.004_wipe
--a always,exit -F arch=b64 -S rmdir -S unlink -S unlinkat -S rename -S renameat -F auid=0 -k T1070.004_filedel_root
--a always,exit -F arch=b64 -S renameat2 -F auid=0 -k T1070.004_filedel_root
+-a always,exit -F arch=b64 -S rmdir -S unlink -S unlinkat -S rename -S renameat -S renameat2 -F auid=0 -k T1070.004_filedel_root
 {% if lvl >= 2 %}
 -w /usr/bin/scrub -p x -k T1070.004_scrub
 -w /usr/bin/dd    -p x -k T1070.004_dd
--a always,exit -F arch=b64 -S rmdir -S unlink -S unlinkat -S rename -S renameat -F auid!=unset -F auid>=1000 -k T1070.004_filedel
--a always,exit -F arch=b64 -S renameat2 -F auid!=unset -F auid>=1000 -k T1070.004_filedel
+-a always,exit -F arch=b64 -S rmdir -S unlink -S unlinkat -S rename -S renameat -S renameat2 -F auid!=unset -F auid>=1000 -k T1070.004_filedel
 {% endif %}
 
 ## --- Network connections ---------------------------------------------------
 {% if lvl >= 2 and 'edge' not in uc %}
-## Every successful outbound IPv4 and IPv6 connect, the largest event source
-## on a busy host. The edge overlay drops it. Two keys on one rule cost
-## nothing extra; sigma's network_service_scanning matches network_connect_4.
+## Every outbound connect: the largest event source on a busy host. The edge
+## overlay drops it, as the edge firewall records it.
+## Dual-keyed: SigmaHQ's network_service_scanning matches network_connect_4
+## literally. One rule, one record. Keep both keys.
 -a always,exit -F arch=b64 -S connect -F a2=16 -F success=1 -k T1071_connect4 -k network_connect_4
 -a always,exit -F arch=b64 -S connect -F a2=28 -F success=1 -k T1071_connect6
 {% endif %}
@@ -424,22 +540,23 @@
 {% endif %}
 
 ## --- Tools: download, remote access, decode --------------------------------
-## susp_activity is the key SigmaHQ's susp_c2_commands matches.
+## Dual-keyed: SigmaHQ's susp_c2_commands matches susp_activity literally.
+## One rule, one record. Keep both keys.
 -w /usr/bin/wget  -p x -k T1105_wget -k susp_activity
 -w /usr/bin/curl  -p x -k T1105_curl -k susp_activity
 -w /usr/bin/ssh   -p x -k T1021.004_ssh -k susp_activity
--w /usr/bin/socat -p x -k T1105_socat
+-w /usr/bin/socat -p x -k T1105_socat -k susp_activity
 -w /bin/nc        -p x -k T1105_nc -k susp_activity
 -w /usr/bin/ncat  -p x -k T1105_ncat -k susp_activity
 -w /usr/sbin/stunnel -p x -k T1573.002_stunnel
 -w /usr/bin/stunnel  -p x -k T1573.002_stunnel
 {% if lvl >= 2 %}
--w /usr/bin/ftp   -p x -k T1105_ftp
--w /usr/bin/scp   -p x -k T1105_scp
--w /usr/bin/sftp  -p x -k T1105_sftp
+-w /usr/bin/ftp   -p x -k T1105_ftp -k susp_activity
+-w /usr/bin/scp   -p x -k T1105_scp -k susp_activity
+-w /usr/bin/sftp  -p x -k T1105_sftp -k susp_activity
 -w /bin/nc.openbsd     -p x -k T1105_nc -k susp_activity
 -w /bin/nc.traditional -p x -k T1105_nc -k susp_activity
--w /usr/bin/rdesktop  -p x -k T1219_rat
+-w /usr/bin/rdesktop  -p x -k T1219_rat -k susp_activity
 -w /usr/bin/xfreerdp  -p x -k T1219_rat -k susp_activity
 -w /usr/bin/teamviewer -p x -k T1219_rat
 -w /usr/bin/certutil -p x -k T1140_certutil
@@ -447,13 +564,15 @@
 -w /usr/bin/base64  -p x -k T1140_base64 -k susp_activity
 -w /usr/bin/openssl -p x -k T1140_openssl
 -w /etc/aliases  -p wa -k T1114_mail
-{{ wdir('/etc/postfix', 'wa', 'T1114_mail') }}
-{{ wdir('/etc/exim4', 'wa', 'T1114_mail') }}
+{{ wdir('/etc/postfix', 'wa', 'T1114_mail', optional=true) }}
+{{ wdir('/etc/exim4', 'wa', 'T1114_mail', optional=true) }}
 {% endif %}
 
 ## --- Power state -----------------------------------------------------------
 -w /sbin/shutdown -p x -k T1529_power
 -w /sbin/reboot   -p x -k T1529_power
+## reboot(2) itself, whichever binary or symlink made the call.
+-a always,exit -F arch=b64 -S reboot -k T1529_power
 {% if lvl >= 2 %}
 -w /sbin/poweroff -p x -k T1529_power
 -w /sbin/halt     -p x -k T1529_power
@@ -462,10 +581,9 @@
 ## --- Containers -------------------------------------------------------------
 -w /usr/bin/docker  -p x -k T1610_docker
 -w /var/run/docker.sock -p rwa -k T1610_docker_sock
--a always,exit -F arch=b64 -S connect -F path=/run/docker.sock -k T1610_docker_sock
 {% if lvl >= 2 %}
 -w /usr/bin/dockerd -p x -k T1610_docker
-{{ wdir('/etc/docker', 'wa', 'T1610_docker_config') }}
+{{ wdir('/etc/docker', 'wa', 'T1610_docker_config', optional=true) }}
 -w /usr/bin/podman     -p x -k T1610_podman
 -w /usr/bin/containerd -p x -k T1610_containerd
 -w /usr/bin/runc       -p x -k T1610_runc
@@ -502,13 +620,12 @@
 -a always,exit -F arch=b64 -S execve -F path=/usr/bin/python3 -F perm=x -k T1059.006_python
 -a always,exit -F arch=b64 -S execve -F path=/usr/bin/python  -F perm=x -k T1059.006_python
 -a always,exit -F arch=b64 -S execve -F path=/usr/bin/perl    -F perm=x -k T1059.006_perl
-## auid!=unset is required: daemons run with auid unset and uid 0, so without
-## it this matches every process every service starts.
--a always,exit -F arch=b64 -S execve -F auid!=unset -C auid!=uid -k T1548.001_priv_ctx_exec
--a always,exit -F arch=b64 -S execveat -F auid!=unset -C auid!=uid -k T1548.001_priv_ctx_exec
--a always,exit -F arch=b64 -S setuid -S setgid -S setreuid -S setregid -F auid!=unset -k T1548.001_setid
--a always,exit -F arch=b64 -S setresuid -S setresgid -F auid!=unset -k T1548.001_setid
+## MUST keep auid!=unset: daemons have auid unset and uid 0, so auid!=uid
+## would match every daemon execve.
+-a always,exit -F arch=b64 -S execve -S execveat -F auid!=unset -C auid!=uid -k T1548.001_priv_ctx_exec
+## The failure rule goes first: the first match decides the key.
 -a always,exit -F arch=b64 -S setuid -S setgid -S setreuid -S setregid -F exit=-EPERM -k T1548.001_setid_fail
+-a always,exit -F arch=b64 -S setuid -S setgid -S setreuid -S setregid -S setresuid -S setresgid -F auid!=unset -k T1548.001_setid
 ## Denied, not merely missing: ENOENT probes (ld.so.preload on every exec) are noise.
 -a always,exit -F arch=b64 -S open -S openat -F exit=-EACCES -F auid!=unset -F auid>=1000 -F dir=/etc -k T1068_denied
 -a always,exit -F arch=b64 -S open -S openat -F exit=-EPERM  -F auid!=unset -F auid>=1000 -F dir=/etc -k T1068_denied
@@ -516,9 +633,7 @@
 -a always,exit -F arch=b64 -S open -S openat -F exit=-EPERM  -F auid!=unset -F auid>=1000 -F dir=/root -k T1068_denied
 -a always,exit -F arch=b64 -S openat2 -F exit=-EACCES -F auid!=unset -F auid>=1000 -F dir=/etc -k T1068_denied
 -a always,exit -F arch=b64 -S openat2 -F exit=-EACCES -F auid!=unset -F auid>=1000 -F dir=/root -k T1068_denied
--a always,exit -F arch=b64 -S msgctl -S msgget -k T1559_ipc
--a always,exit -F arch=b64 -S semctl -S semget -S semop -S semtimedop -k T1559_ipc
--a always,exit -F arch=b64 -S shmctl -S shmget -k T1559_ipc
+-a always,exit -F arch=b64 -S msgctl -S msgget -S semctl -S semget -S semop -S semtimedop -S shmctl -S shmget -k T1559_ipc
 
 ## --- High: recon and staging tools -----------------------------------------
 ## Scoped to sessions: scripts and monitoring agents run these constantly. The
@@ -536,14 +651,15 @@
 -a always,exit -F arch=b64 -F path=/usr/bin/bzip2   -F perm=x -F auid!=unset -k T1560_archive
 -a always,exit -F arch=b64 -F path=/usr/bin/zstd    -F perm=x -F auid!=unset -k T1560_archive
 -a always,exit -F arch=b64 -F path=/usr/bin/xz      -F perm=x -F auid!=unset -k T1560_archive
-## Rarely run, high-signal whoever runs them. sigma: susp_activity.
+## Rarely run, high-signal whoever runs them. Each logs an EXECVE record with
+## argv, at a fraction of the cost of a broad -S execve. Dual-keyed as above.
 -w /usr/bin/nmap     -p x -k T1046_recon -k susp_activity
 -w /usr/bin/ss       -p x -k T1049_recon -k susp_activity
 -w /usr/bin/netstat  -p x -k T1049_recon -k susp_activity
--w /usr/sbin/tcpdump -p x -k T1049_recon
+-w /usr/sbin/tcpdump -p x -k T1040_sniff -k T1049_recon
 -w /usr/sbin/traceroute -p x -k T1049_recon
--w /usr/bin/tshark   -p x -k T1049_recon
--w /usr/bin/wireshark -p x -k T1049_recon
+-w /usr/bin/tshark   -p x -k T1040_sniff -k T1049_recon -k susp_activity
+-w /usr/bin/wireshark -p x -k T1040_sniff -k T1049_recon -k susp_activity
 -w /sbin/iptables    -p x -k T1518.001_recon
 -w /usr/sbin/nft     -p x -k T1518.001_recon
 -w /sbin/ifconfig    -p x -k T1518.001_recon
@@ -571,17 +687,24 @@
 -w /var/log/lastlog -p wa -k T1078.001_login
 -w /var/log/tallylog -p wa -k T1078.001_login
 -w /var/log/secure -p wa -k T1078.001_login
--w /boot/grub2/grub.cfg -p wa -k T1542.003_boot
--w /boot/grub/grub.cfg -p wa -k T1542.003_boot
 
 ## --- High: third-party management agents -----------------------------------
+{% if "/opt/BESClient" in hyperi_audit_present_dirs | default([]) %}
 -a always,exit -F arch=b64 -S open -S openat -F success=0 -F dir=/opt/BESClient -k T1072_besclient
-{{ wdir('/var/opt/BESClient', 'wa', 'T1072_besclient') }}
-{{ wdir('/etc/chef', 'wa', 'T1072_chef') }}
-{{ wdir('/etc/salt', 'wa', 'T1072_salt') }}
-{{ wdir('/etc/puppet/ssl', 'wa', 'T1072_puppet') }}
+{% endif %}
+{{ wdir('/var/opt/BESClient', 'wa', 'T1072_besclient', optional=true) }}
+{{ wdir('/etc/chef', 'wa', 'T1072_chef', optional=true) }}
+{{ wdir('/etc/salt', 'wa', 'T1072_salt', optional=true) }}
+{{ wdir('/etc/puppet/ssl', 'wa', 'T1072_puppet', optional=true) }}
+
+
+## --- High: every command a session runs ------------------------------------
+## LAST, so every more specific rule above keeps its key. The commands the
+## session excludes drop (grep, ls, cat and the rest) are not logged.
+-a always,exit -F arch=b64 -S execve -S execveat -F auid!=unset -F auid>=1000 -k T1059_session_exec
 {% endif %}
 
 ## --- Lock ------------------------------------------------------------------
 ## No rule changes until reboot. Must be last.
 -e 2
+{% endfilter %}

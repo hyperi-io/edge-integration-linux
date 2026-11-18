@@ -12,10 +12,15 @@
 # rsyslog parse the drop-in twice and report the config as errored.
 - name: Check whether rsyslog.conf already includes rsyslog.d
   ansible.builtin.command:
-    argv: [grep, -Eq, '(IncludeConfig|include).*rsyslog\.d', /etc/rsyslog.conf]
+    argv: [grep, -Eq, "{{ hyperi_audit_include_re }}", /etc/rsyslog.conf]
   register: hyperi_audit_dropin_included
   changed_when: false
   failed_when: hyperi_audit_dropin_included.rc > 1
+  vars:
+    # An active line that pulls in every .conf file, so a commented-out or
+    # single-file include does not count.
+    hyperi_audit_include_re: >-
+      ^\s*(\$IncludeConfig\s+/etc/rsyslog\.d/(\*(\.conf)?)?\s*$|include\(.*file="/etc/rsyslog\.d/\*(\.conf)?")
 
 - name: Check whether rsyslog.conf sets a legacy work directory
   ansible.builtin.command:

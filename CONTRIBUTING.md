@@ -46,7 +46,7 @@ Lint, the same tools as CI's lint job, from the repo root:
 (cd test && uv sync --locked --group lint)
 test/.venv/bin/ansible-lint
 (cd test && .venv/bin/ruff format --check . && .venv/bin/ruff check . && .venv/bin/ty check)
-test/.venv/bin/shellcheck build-tarball.sh test/run.sh
+test/.venv/bin/shellcheck build-tarball.sh test/run.sh test/lab/*.sh
 test/.venv/bin/hadolint test/images/Dockerfile.* test/receiver/Dockerfile
 test/.venv/bin/actionlint
 ```

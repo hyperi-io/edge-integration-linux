@@ -18,6 +18,7 @@ To remove it:
 
    ```sh
    rm -f /etc/audit/rules.d/hyperi-audit.rules /etc/rsyslog.d/99-hyperi-rsyslog.conf
+   rm -rf /var/lib/hyperi_audit
    ```
 
 2. Restore `/etc/audit/auditd.conf` from your config management or backup.

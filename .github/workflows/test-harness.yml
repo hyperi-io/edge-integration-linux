@@ -31,9 +31,12 @@ jobs:
       - name: ruff and ty
         working-directory: test
         run: |
-          .venv/bin/ruff format --check .
-          .venv/bin/ruff check .
-          .venv/bin/ty check
+          .venv/bin/ruff format --check . ../roles/hyperi_audit/filter_plugins
+          .venv/bin/ruff check . ../roles/hyperi_audit/filter_plugins
+          .venv/bin/ty check . ../roles/hyperi_audit/filter_plugins
+      - name: Reference rulesets current, each level holding the one below
+        working-directory: test
+        run: uv run --locked --group lint pytest test_reference.py --tb=short
       - name: shellcheck
         run: test/.venv/bin/shellcheck build-tarball.sh test/run.sh test/lab/*.sh
       - name: hadolint
@@ -44,11 +47,16 @@ jobs:
   # Loads every rendered ruleset into the runner's own kernel (a disposable VM)
   # and fires each detection. Always GitHub-hosted: it needs sudo and a kernel
   # nothing else shares.
+  # arm64 runners are free for public repos only, so a private repo runs x64.
   kernel:
-    name: kernel (rules load and fire)
+    name: kernel (${{ matrix.runner }})
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON(github.event.repository.private && '["ubuntu-latest"]' || '["ubuntu-latest", "ubuntu-24.04-arm"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
