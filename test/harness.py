@@ -1,43 +1,75 @@
-"""
-Helpers for the HyperI Linux audit collector docker test harness.
+"""Helpers for the Docker test harness.
 
-Ports the old VM snapshot/reset regime to disposable containers. One persistent
-syslog receiver (see conftest.py) spans the whole run; each distro+version is
-baked, started, converged (role in config-only mode), fed a unique marker via a
-seeded audit.log, checked for that marker at the receiver, then torn down - one
-at a time. Host-adaptive: amd64-only images (el6) skip on an arm64 host.
+One syslog receiver (conftest.py) spans the run. Each distro in matrix.yml is
+baked, started, converged with the role in config-only mode, checked and torn
+down, one at a time. amd64-only images skip on an arm64 host.
 """
 
+import json
 import os
 import platform
 import subprocess
 import time
+import uuid
+from collections.abc import Mapping
 from pathlib import Path
 
+import pytest
 import yaml
 
 HERE = Path(__file__).parent
-ROLE_FILES = HERE.parent / "roles" / "hyperi_audit" / "files"
-_MATRIX = yaml.safe_load((HERE / "matrix.yml").read_text())
-RECEIVER_IMAGE = _MATRIX["receiver_image"]
-NETWORK = _MATRIX["network"]
-DISTROS = _MATRIX["distros"]
+_MATRIX = yaml.safe_load((HERE / "matrix.yml").read_text(encoding="utf-8"))
+RECEIVER_IMAGE: str = _MATRIX["receiver_image"]
+NETWORK: str = _MATRIX["network"]
+DISTROS: list[dict] = _MATRIX["distros"]
 
 RECEIVER_NAME = "hyperi-audit-receiver"
 RECEIVER_LOG = "/var/log/hyperi-received/received.log"
-COLLECTOR_ADDRESS = RECEIVER_NAME  # resolvable container name on NETWORK
+RECEIVER_ADDRESS = RECEIVER_NAME  # resolvable container name on NETWORK
 AUDIT_LOG = "/var/log/audit/audit.log"
+RULES_PATH = "/etc/audit/rules.d/hyperi-audit.rules"
+FORWARDER_PATH = "/etc/rsyslog.d/99-hyperi-rsyslog.conf"
 
-HOST_ARCH = platform.machine().lower()  # aarch64/arm64 vs x86_64/amd64
+HOST_ARCH = platform.machine().lower()
 HOST_IS_ARM = HOST_ARCH in ("arm64", "aarch64")
 
+# hyperi-ci's Docker Hub pull-through prefix, set only on runners that reach it.
+DOCKERHUB_MIRROR = os.environ.get("HYPERCI_DOCKERHUB_MIRROR", "").rstrip("/")
 
-def run(cmd, check=True, timeout=900, cwd=None, env=None):
-    """Run a command list, capturing output; raise a readable error on failure."""
-    # encoding/errors are pinned explicitly: text=True alone decodes with the
-    # locale's codec, so a stray non-UTF8 byte in a container's output (an EOL
-    # distro's package manager is a fine source of those) raises
-    # UnicodeDecodeError and takes the whole run down instead of failing a test.
+# rsyslogd -N1 exits non-zero on benign warnings, so checks key on these instead.
+CONFIG_PROBLEMS = (
+    "error",
+    "could not load",
+    "not found",
+    "more than once",
+    "already in this config",
+)
+
+
+def run(
+    cmd: list[str],
+    check: bool = True,
+    timeout: int = 900,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a command and capture its output.
+
+    Args:
+        cmd: The argv to run.
+        check: Raise when the command exits non-zero.
+        timeout: Seconds before the command is killed.
+        cwd: Working directory.
+        env: Full environment for the child.
+
+    Returns:
+        The completed process, stdout and stderr decoded as UTF-8.
+
+    Raises:
+        RuntimeError: ``check`` is set and the command failed. The message
+            carries both output streams.
+    """
+    # errors="replace": EOL distros' package managers emit non-UTF-8 bytes.
     p = subprocess.run(
         cmd,
         timeout=timeout,
@@ -47,6 +79,7 @@ def run(cmd, check=True, timeout=900, cwd=None, env=None):
         text=True,
         encoding="utf-8",
         errors="replace",
+        check=False,
     )
     if check and p.returncode != 0:
         raise RuntimeError(
@@ -56,34 +89,79 @@ def run(cmd, check=True, timeout=900, cwd=None, env=None):
     return p
 
 
-def image_exists(tag):
+def hub_image(ref: str) -> str:
+    """Return a Docker Hub image reference routed through the mirror, if set."""
+    if not DOCKERHUB_MIRROR:
+        return ref
+    repo = ref.split("@")[0].split(":")[0]
+    name = ref if "/" in repo else f"library/{ref}"
+    return f"{DOCKERHUB_MIRROR}/{name}"
+
+
+def image_exists(tag: str) -> bool:
+    """Return True when the local daemon has an image with this tag."""
     return run(["docker", "image", "inspect", tag], check=False).returncode == 0
 
 
-def _platform_args(distro):
+def _platform_args(distro: Mapping) -> list[str]:
     p = distro.get("platform")
     return ["--platform", p] if p else []
 
 
-def harness_image(distro):
+def harness_image(distro: Mapping) -> str:
+    """Return the baked image tag for a matrix entry."""
     return f"hyperi-harness-{distro['id']}"
 
 
-def uut_name(distro):
+def uut_name(distro: Mapping) -> str:
+    """Return the container name for a matrix entry."""
     return f"hyperi-uut-{distro['id']}"
 
 
-def bake(distro):
-    """Build the per-distro image (python3 + rsyslog + audit pre-installed)."""
-    # Modern EL uses dnf (Dockerfile.el); EOL EL (el6/el7) ships yum, so route it
-    # to the yum bake. An explicit `dockerfile` in the matrix overrides both.
+def skip_if_foreign_arch(distro: Mapping) -> None:
+    """Skip an amd64-only distro on an arm64 host."""
+    if distro.get("platform") == "linux/amd64" and HOST_IS_ARM:
+        pytest.skip(f"{distro['id']} is amd64-only; host is {HOST_ARCH}")
+
+
+def marker(distro: Mapping, kind: str = "MARKER") -> str:
+    """Return a run-unique string to seed into audit.log."""
+    slug = distro["id"].replace(".", "_").replace("-", "_")
+    return f"HYPERI_HARNESS_{kind}_{slug}_{uuid.uuid4().hex[:8]}"
+
+
+def _receiver_base() -> str:
+    dockerfile = (HERE / "receiver" / "Dockerfile").read_text(encoding="utf-8")
+    for line in dockerfile.splitlines():
+        if line.startswith("ARG BASE="):
+            return line.split("=", 1)[1]
+    raise RuntimeError("test/receiver/Dockerfile has no ARG BASE= default")
+
+
+def build_receiver() -> None:
+    """Build the receiver image, through the mirror when one is set."""
+    base_args = ["--build-arg", f"BASE={hub_image(_receiver_base())}"]
+    run(
+        [
+            "docker",
+            "build",
+            "-t",
+            RECEIVER_IMAGE,
+            *(base_args if DOCKERHUB_MIRROR else []),
+            str(HERE / "receiver"),
+        ]
+    )
+
+
+def bake(distro: Mapping) -> None:
+    """Build the per-distro image with python3, rsyslog and audit installed."""
+    # An explicit matrix `dockerfile` wins. EOL EL ships yum rather than dnf.
     if distro.get("dockerfile"):
         df_name = distro["dockerfile"]
     elif distro["family"] == "el" and distro.get("eol"):
         df_name = "Dockerfile.el-yum"
     else:
         df_name = f"Dockerfile.{distro['family']}"
-    dockerfile = HERE / "images" / df_name
     run(
         [
             "docker",
@@ -91,16 +169,21 @@ def bake(distro):
             "-t",
             harness_image(distro),
             "--build-arg",
-            f"BASE={distro['base']}",
+            f"BASE={hub_image(distro['base'])}",
             *_platform_args(distro),
             "-f",
-            str(dockerfile),
+            str(HERE / "images" / df_name),
             str(HERE / "images"),
         ]
     )
 
 
-def start_uut(distro):
+def start_uut(distro: Mapping) -> str:
+    """Start the baked image idle on the harness network.
+
+    Returns:
+        The container name.
+    """
     name = uut_name(distro)
     run(["docker", "rm", "-f", name], check=False)
     run(
@@ -122,74 +205,80 @@ def start_uut(distro):
     return name
 
 
-def _ansible_env():
+def _ansible_env() -> dict[str, str]:
     env = dict(os.environ)
     env["ANSIBLE_CONFIG"] = str(HERE / "ansible.cfg")
     env["ANSIBLE_COLLECTIONS_PATH"] = str(HERE / "collections")
     return env
 
 
-def rules_source(level=None, profile_override=None):
-    """The role file a given profile selection is expected to deploy verbatim."""
-    stem = profile_override if profile_override else (level or "medium")
-    return ROLE_FILES / f"hyperi-audit-{stem}.rules"
-
-
-def converge(distro, level="medium", profile_override=None, extra_vars=None):
+def converge(
+    distro: Mapping,
+    extra_vars: Mapping[str, object] | None = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
     """Apply the role in config-only mode over the community.docker connection.
 
-    extra_vars is an optional dict of additional `-e key=value` pairs - the
-    transport tests use it to select syslog-tls and pass the TLS trust settings.
+    Args:
+        distro: The matrix entry to converge.
+        extra_vars: Role variables, passed as one JSON document so lists keep
+            their type. The receiver defaults to the harness receiver unless
+            the caller names it, under either variable name.
+        check: Raise when the play fails. Off for tests that expect a failure.
+
+    Returns:
+        The completed ansible-playbook process.
     """
     name = uut_name(distro)
+    variables: dict[str, object] = {
+        "ansible_connection": "community.docker.docker",
+        "ansible_user": "root",
+        "ansible_host": name,
+    }
+    caller = dict(extra_vars or {})
+    if not {"hyperi_audit_receiver_address", "collector_address"} & caller.keys():
+        variables["hyperi_audit_receiver_address"] = RECEIVER_ADDRESS
+    if distro.get("python"):
+        variables["ansible_python_interpreter"] = distro["python"]
+    variables |= caller
     cmd = [
         "ansible-playbook",
         "-i",
         f"{name},",
         "converge.yml",
         "-e",
-        f"collector_address={COLLECTOR_ADDRESS}",
-        "-e",
-        f"hyperi_audit_level={level}",
-        "-e",
-        "ansible_connection=community.docker.docker",
-        "-e",
-        "ansible_user=root",
-        "-e",
-        f"ansible_host={name}",
+        json.dumps(variables),
     ]
-    # The profile override REPLACES the level's rules file when set; the role
-    # treats an empty/undefined value as "no override", so only pass it when asked.
-    if profile_override:
-        cmd += ["-e", f"hyperi_audit_profile_override={profile_override}"]
-    for key, value in (extra_vars or {}).items():
-        cmd += ["-e", f"{key}={value}"]
-    # Some distros ship a too-old default python3 for modern ansible-core
-    # (e.g. openSUSE Leap 15.6 -> 3.6); pin a newer interpreter when set.
-    if distro.get("python"):
-        cmd += ["-e", f"ansible_python_interpreter={distro['python']}"]
-    run(cmd, cwd=str(HERE), env=_ansible_env())
+    return run(cmd, check=check, cwd=HERE, env=_ansible_env())
 
 
-def exec_in(name, script):
+def exec_in(name: str, script: str) -> subprocess.CompletedProcess[str]:
+    """Run a shell script in the container, without raising on failure."""
     return run(["docker", "exec", name, "sh", "-c", script], check=False)
 
 
-def rsyslog_config_check(name):
-    """Validate the UUT's rsyslog config without starting the daemon.
+def read_file(name: str, path: str) -> str:
+    """Return a file from the container, asserting it exists."""
+    got = run(["docker", "exec", name, "cat", path], check=False)
+    assert got.returncode == 0, f"{path} not deployed:\n{got.stderr}"
+    return got.stdout
 
-    `rsyslogd -N1` parses rsyslog.conf plus our drop-in and reports config
-    errors on stderr, exiting non-zero on a fatal problem, WITHOUT launching the
-    daemon. Returns (rc, combined stdout+stderr) so the caller can assert both
-    the exit code and scan the text for "error" - a broken include (e.g. a
-    duplicated drop-in include on a modern EL host) surfaces here, where the
-    marker substring check alone would not.
+
+def assert_rsyslog_config_valid(name: str) -> None:
+    """Parse the deployed rsyslog config with ``rsyslogd -N1``, without starting it.
+
+    A missing output module, a malformed action or a drop-in included twice
+    shows up here, where a substring check on the file would pass.
     """
     r = run(["docker", "exec", name, "rsyslogd", "-N1"], check=False)
-    return r.returncode, r.stdout + r.stderr
+    output = r.stdout + r.stderr
+    assert not any(p in output.lower() for p in CONFIG_PROBLEMS), (
+        f"rsyslogd -N1 reported a config problem (rc={r.returncode}):\n{output}"
+    )
 
 
-def ensure_audit_log(name):
+def ensure_audit_log(name: str) -> None:
+    """Create an empty audit.log for imfile to follow."""
     run(
         [
             "docker",
@@ -202,43 +291,46 @@ def ensure_audit_log(name):
     )
 
 
-def start_rsyslog(name):
-    # The role wrote /etc/rsyslog.d/99-hyperi-rsyslog.conf and made rsyslog.conf
-    # include it; start rsyslogd manually (services are gated off in test mode).
+def start_rsyslog(name: str) -> None:
+    """Start rsyslogd by hand: the role's service tasks are off in test mode."""
     run(["docker", "exec", "-d", name, "rsyslogd"])
     time.sleep(2)
 
 
-def seed_marker(name, marker):
+def seed_marker(name: str, marker_text: str) -> None:
+    """Append an audit record carrying the marker to the container's audit.log."""
     line = (
         "type=SYSCALL msg=audit(1600000000.000:1): arch=c000003e syscall=2 "
-        'success=yes exit=0 comm="hyperi-test" key="%s"' % marker
+        f'success=yes exit=0 comm="hyperi-test" key="{marker_text}"'
     )
-    run(
-        [
-            "docker",
-            "exec",
-            name,
-            "sh",
-            "-c",
-            "printf '%%s\\n' '%s' >> %s" % (line, AUDIT_LOG),
-        ]
-    )
+    run(["docker", "exec", name, "sh", "-c", f"printf '%s\\n' '{line}' >> {AUDIT_LOG}"])
 
 
-def receiver_log():
+def receiver_log() -> str:
+    """Return everything the receiver has written so far."""
     r = run(["docker", "exec", RECEIVER_NAME, "cat", RECEIVER_LOG], check=False)
     return r.stdout if r.returncode == 0 else ""
 
 
-def wait_for_marker(marker, timeout=60, interval=3):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if marker in receiver_log():
-            return True
+def assert_delivered_once(
+    marker_text: str, timeout: int = 60, interval: int = 3
+) -> None:
+    """Wait for the marker at the receiver, then require exactly one copy.
+
+    A second copy means the audit stream also reached the general catch-all,
+    or rsyslog loaded the drop-in twice.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and marker_text not in receiver_log():
         time.sleep(interval)
-    return False
+    received = receiver_log()
+    count = received.count(marker_text)
+    assert count == 1, (
+        f"marker {marker_text} arrived {count} times, expected exactly 1\n"
+        f"--- last receiver log ---\n{received[-2000:]}"
+    )
 
 
-def teardown_uut(distro):
+def teardown_uut(distro: Mapping) -> None:
+    """Remove the container under test."""
     run(["docker", "rm", "-f", uut_name(distro)], check=False)

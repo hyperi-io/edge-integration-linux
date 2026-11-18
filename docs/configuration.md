@@ -1,110 +1,100 @@
-<!--
-Project:      HyperI Linux audit collector
-File:         docs/configuration.md
-Purpose:      Reference -- the complete role-variable set, the audit profiles,
-              and the auditd.conf tuning the role applies.
-License:      Apache-2.0
-Copyright:    (c) 2026 HYPERI PTY LIMITED
--->
+# Configuration reference
 
-# Configuration
-
-The role is driven by a handful of variables and one profile choice. This page is
-the look-up reference: every variable with its type, default and effect, then what
-each audit profile contains, then the `auditd.conf` tuning the role applies. The
-transport variables have their own page -- this table names them and
-[transport](transport.md) covers RELP and the TLS trust models. Set the
-variables in your inventory's `vars:` block or via `--extra-vars`.
+Every variable the `hyperi_audit` role reads, what each ruleset level and overlay adds, and the `auditd.conf` values the role sets. Defaults live in `roles/hyperi_audit/defaults/main.yml`, and the ruleset in `roles/hyperi_audit/templates/hyperi-audit.rules.j2`. Set the variables in your inventory's `vars:` block, in `group_vars/`, or with `--extra-vars`.
 
 ## Role variables
 
-| Variable | Type | Default | Effect |
+The role checks every input before it touches the host, so a bad value fails the run in the first few tasks with a message naming the variable.
+
+| Variable | Default | Accepts | Effect |
 |---|---|---|---|
-| `collector_address` | string (IP or DNS name) | none -- **required** | The collector that receives the forwarded streams: audit on TCP 12201, general syslog on TCP 12205. The run **fails immediately** if unset. |
-| `hyperi_audit_level` | `low` \| `medium` \| `high` | `medium` | Selects the audit ruleset by depth. Any other value **fails** the run. |
-| `hyperi_audit_profile_override` | `low` \| `medium` \| `high` \| `internet` | unset | **Replaces** the level's ruleset with a named profile -- it does not layer on top. An unknown value **fails** the run. Setting it alongside a non-default `hyperi_audit_level` **warns**, because the level is then discarded. Formerly `hyperi_audit_use_case`. |
-| `hyperi_audit_transport` | `tcp` \| `relp` \| `syslog-tls` \| `relp-tls` | `tcp` | Transport for both streams. `tcp` is plain syslog (default, works everywhere); `relp` adds reliable delivery; `syslog-tls` adds encryption; `relp-tls` both -- see [transport](transport.md). Any other value **fails** the run. |
-| `hyperi_audit_tls_mode` | `anon` \| `server` \| `mutual` | `anon` | Trust model for the TLS transports. `anon` = encryption only; `server` = validate the receiver, no client cert; `mutual` = client cert. `relp-tls` rejects `server`. Ignored when `transport: tcp`. |
-| `hyperi_audit_tls_ca_file` / `_client_cert` / `_client_key` / `_permitted_peer` | string (path / name) | unset | Certificate material for `server` and `mutual`. The CA is required for both; the client cert and key for `mutual`. Full detail in [transport](transport.md). |
-| `hyperi_audit_port_audit` / `hyperi_audit_port_syslog` | string (port) | `12201` / `12205` | The forward ports. Point them at the receiver's TLS listeners (e.g. 6514) when using a TLS transport; the SELinux egress grant follows whatever you set. |
-| `hyperi_audit_start_services` | boolean | `true` | `true` enables, stops and starts `auditd` and `rsyslog` as part of the run. `false` writes the configuration only and never touches services -- used by the test harness to converge inside a container that has no init. |
+| `hyperi_audit_receiver_address` | the value of `collector_address`, else empty | host name or IP address | The receiver for both streams. Required. A value that is empty, or holds anything but letters, digits, `.`, `:` and `-`, fails the run. |
+| `hyperi_audit_level` | `medium` | `low`, `medium`, `high` | Ruleset depth. Levels are cumulative: `medium` is `low` plus more, `high` is `medium` plus more. |
+| `hyperi_audit_use_cases` | `[]` | a list of `webserver`, `edge`, `container-host` | Overlays applied on top of the level. See [Overlays](#overlays). |
+| `hyperi_audit_webserver_users` | `www-data`, `apache`, `nginx`, `httpd`, `lighttpd`, `caddy` | account names | Accounts the `webserver` overlay treats as web servers. The role resolves the ones that exist on the host to uids at deploy time. When none exist it warns and adds no webshell rules. |
+| `hyperi_audit_transport` | `tcp` | `tcp`, `syslog-tls`, `relp`, `relp-tls` | How both streams leave the host. See [transport](transport.md). |
+| `hyperi_audit_tls_mode` | `anon` | `anon`, `server`, `mutual` | TLS trust for `syslog-tls` and `relp-tls`. `relp-tls` takes `anon` or `mutual`. Ignored for `tcp` and `relp`. |
+| `hyperi_audit_tls_ca_file` | empty | absolute path on the endpoint | CA that signed the receiver's certificate. Required for `server` and `mutual`. |
+| `hyperi_audit_tls_client_cert` | empty | absolute path on the endpoint | The endpoint's certificate. Required for `mutual`. |
+| `hyperi_audit_tls_client_key` | empty | absolute path on the endpoint | The endpoint's private key. Required for `mutual`. |
+| `hyperi_audit_tls_permitted_peer` | empty | a certificate name, no spaces or quotes | The name the receiver's certificate must carry under `server` and `mutual`. Empty means the receiver address. Required when the receiver address is an IP. |
+| `hyperi_audit_port_audit` | `12201` | 1 to 65535 | Receiver port for the audit stream. |
+| `hyperi_audit_port_syslog` | `12205` | 1 to 65535 | Receiver port for the syslog stream. |
+| `hyperi_audit_start_services` | `true` | boolean | `false` writes the config and leaves services alone. The container harness uses it, because its containers run no init. |
 
-`hyperi_audit_profile_override` replaces rather than merges, so when it is set
-`hyperi_audit_level` has no effect. Selecting `level=high` with
-`profile_override=internet` deploys the `internet` ruleset, which is
-`medium`-based -- there is no high-based internet variant unless someone writes
-one.
+TLS file paths must be absolute with no quotes or whitespace, because they land inside rsyslog config.
 
-```mermaid
-flowchart TB
-  start(["Role variables"]) --> ovr{"profile_override set?"}
-  ovr -->|yes| useovr["Deploy hyperi-audit-&lt;override&gt;.rules"]
-  ovr -->|no| lvl{"hyperi_audit_level"}
-  lvl -->|low| low["hyperi-audit-low.rules"]
-  lvl -->|medium| med["hyperi-audit-medium.rules"]
-  lvl -->|high| high["hyperi-audit-high.rules"]
-```
+### Deprecated variables
 
-## Audit profiles
+Both still work, and both will go in a later major release.
 
-The axis across every profile is **detection breadth versus host CPU and
-forwarding bandwidth**. Breadth accrues and CPU does not, so pick for the host
-rather than defaulting to the widest. Each profile ships as a single
-`roles/hyperi_audit/files/hyperi-audit-<profile>.rules` file; all share the same
-base configuration, anti-tamper posture and 64-bit assumption, and differ only
-in how much syscall-level volume they ask the kernel to generate.
-
-| Profile | Selected by | For | Contains |
-|---|---|---|---|
-| `low` | `hyperi_audit_level: low` | Constrained hosts, slow links | The high-signal file and exec watches plus the cheapest kernel TTPs. **Drops** the high-volume syscall auditing: per-connection network, DAC permission changes, user file deletion, IPC, and the io_uring / namespace breadth. |
-| `medium` | `hyperi_audit_level: medium` (default) | The general fleet | Balanced host telemetry. The starting point unless you have a reason to move. |
-| `high` | `hyperi_audit_level: high` | High-value hosts that can carry the volume | `medium` **plus** interpreter exec, the full setuid/DAC syscall family, IPC, the recon toolset, data staging, session/PAM, and third-party agents. Not for constrained or slow-link endpoints. |
-| `internet` | `hyperi_audit_profile_override: internet` | Internet-facing edge (web servers, reverse proxies, bastions) | `medium` **minus** per-connection network logging, on the assumption an edge NIPS and firewall already carry that telemetry. Everything else is retained. |
-
-Two of the settings vary with the profile:
-
-- **Kernel backlog** (the `-b` rule directive): `8192` for `low`, `medium` and
-  `internet`; `16384` for `high`. With the paired `--backlog_wait_time 0` fix the
-  kernel drops on overflow rather than throttling the host, so more backlog means
-  fewer lost events under burst.
-- **`priority_boost`** (see the tuning table below): `2` for `low`, `4` for
-  `medium` and `high`.
-
-The rulesets carry their own lineage -- the merge order across the public
-baselines (Neo23x0, ACSC, NIST, DISA STIG, alphagov/GDS, US DoD, SigmaHQ), the
-MITRE ATT&CK key mappings, the SigmaHQ alignment and the load-order traps -- in
-the `# HISTORY.` header of each `.rules` file. Read that header before editing a
-ruleset. For how the profile is selected and copied into place at deploy time,
-see [ARCHITECTURE.md](../ARCHITECTURE.md).
-
-## auditd.conf tuning
-
-The role edits the distro's `auditd.conf` line by line (it does not template a
-whole file over the top), applying a fixed set of values plus three that are
-gated on the profile or the probed `auditd` version.
-
-| Setting | Value | Notes |
+| Variable | Use instead | Behaviour |
 |---|---|---|
-| `name_format` | `hostname` | Tags every record with the host's name, so the collector can attribute forwarded records. |
-| `log_group` | `root` | Group ownership of the log. |
-| `max_log_file` | `100` | Per-file cap in MB. |
+| `collector_address` | `hyperi_audit_receiver_address` | Read as the receiver when `hyperi_audit_receiver_address` is unset. |
+| `hyperi_audit_profile_override` | `hyperi_audit_level` and `hyperi_audit_use_cases` | `low`, `medium` or `high` replaces the level. `internet` runs `medium` with the `edge` and `webserver` overlays, added to any overlays you set. The run logs a warning naming the level and overlays it chose. |
+
+## Levels
+
+Pick the lowest level that covers what you need to see. Every level shares the control block, the self-protection watches and the final `-e 2` lock. Each row lists what that level adds to the one before it.
+
+### Settings that change with the level
+
+| Setting | `low` | `medium` | `high` |
+|---|---|---|---|
+| Kernel backlog (`-b`) | 8192 | 8192 | 16384 |
+| `priority_boost` in `auditd.conf` | 2 | 4 | 4 |
+| `CWD` records | excluded | kept | kept |
+| `ptrace` | `POKETEXT`, `POKEDATA`, `POKEUSER` only | every call | every call |
+| systemd unit watches | `/etc/systemd/system`, `/usr/lib/systemd/system` | all of `/etc/systemd`, `/usr/lib/systemd`, `/run/systemd/system` | as `medium` |
+
+### What each level adds
+
+| Area | `low` (the base) | `medium` adds | `high` adds |
+|---|---|---|---|
+| Execution | Root exec from `/tmp`, `/var/tmp`, `/dev/shm`. Any exec from `/dev/shm`. setuid exec | Root exec from `/home`, `/usr/local/bin`, `/opt`. setgid exec | Any exec from `/tmp` and `/var/tmp`. `bash` as root, `python`, `python3`, `perl`. Exec in another user's privilege context. setuid and setgid calls |
+| Audit self-protection | `/var/log/audit`, `/etc/audit`, `/etc/audisp`, the audit tools | `/etc/libaudit.conf`, `ausearch`, `aureport`, `aulast`, `aulastlogin`, `auvirt` | |
+| Kernel | eBPF, `memfd_create`, `kexec`, `open_by_handle_at`, `process_vm_readv` and `_writev`, module load and unload, `/etc/modprobe.d` | `setns`, `unshare`, `io_uring_setup`, sysctl files, `/etc/modules-load.d`, PAM module directories | `pidfd_getfd`, `userfaultfd` |
+| Time | `settimeofday`, `clock_settime`, `/etc/localtime` | `adjtimex`, file timestamp changes from a login session | |
+| Persistence | cron directories and `crontab`, `/var/spool/cron`, init scripts, `rc.local`, `systemctl` | `anacrontab`, cron and at allow and deny lists, `at`, `/etc/init`, motd scripts, udev rules | XDG autostart |
+| Accounts and credentials | `sudoers`, `passwd`, `group`, `shadow` reads and writes, `gshadow`, `useradd`, `usermod`, `userdel`, `su`, `sudo`, `pkexec` | group tools, `gpasswd`, `chage`, `setcap`, `opasswd`, `ldapsearch`, `dbus-send`, `gdbus`, `pam.d`, root touching another user's home | `limits.conf`, `limits.d`, `pam_env.conf` |
+| Shell and SSH | `ld.so.preload`, `/etc/profile` and `profile.d`, root's `.bashrc`, `sshd_config`, `/root/.ssh` | `ld.so.conf`, shell rc files, root's other profiles | |
+| File changes from a login session | | `chmod`, `chown` and xattr calls, file deletion and rename | |
+| Defence evasion | dmesg clear, ASLR off, rsyslog config, `setenforce`, `systemd-run`, SELinux and AppArmor config, `shred`, `wipe`, root deleting files | `scrub`, `dd` | |
+| Network | AF_ALG crypto sockets, raw packet sockets, socket filters | Every successful IPv4 and IPv6 `connect`. Network config files | Every IPv4 and IPv6 socket created, DNS lookups included |
+| Mounts and host identity | `mknod`, `mount` from a session, `sethostname`, `/etc/hosts` | `swapon`, `swapoff`, `/etc/hostname`, `/etc/issue` | |
+| Power | `shutdown`, `reboot` | `poweroff`, `halt` | |
+| Tools | `wget`, `curl`, `ssh`, `socat`, `nc`, `ncat`, `stunnel` | `ftp`, `scp`, `sftp`, remote-desktop tools, `certutil`, `unzip`, `base64`, `openssl`, mail config | Recon tools (`whoami`, `id`, `uname`, `nmap`, `ss`, `tcpdump` and more), archive tools, `cp` and `mv` from a session |
+| Containers and packages | `docker` and its socket | `dockerd`, `podman`, `containerd`, `runc`, `crictl`, `kubelet`, Docker config. Package managers | More package managers |
+| High only | | | SysV IPC, denied opens under `/etc` and `/root`, login records (`utmp`, `wtmp`, `btmp`, `lastlog`), GRUB config, BigFix, Chef, Salt and Puppet config |
+
+Every level also carries a 32-bit ABI tripwire: the rules are `arch=b64`, so a short list of `b32` rules flags a 32-bit process doing what they watch.
+
+At `high`, `grep`, `ls`, `cat` and seven other common commands run from a login session are excluded, so `sudo` sessions do not flood the privilege-context rule.
+
+## Overlays
+
+An overlay adds or removes rules for what the host does. Combine them freely with any level.
+
+| Overlay | Adds | Removes | Use it on |
+|---|---|---|---|
+| `webserver` | Every `execve` and `execveat` by a web server account, key `T1505.003_webshell` | `connect` logging for those accounts, which talk to their backends on every request | Hosts serving HTTP |
+| `edge` | nothing | Per-connection `connect` logging (`medium`, `high`) and per-socket logging (`high`) | Internet-facing hosts with a firewall or NIDS that logs flows |
+| `container-host` | nothing | The runtime's own `setns`, `unshare`, `mount`, `umount2` and `bpf` calls from `runc`, `crun`, `containerd`, `dockerd`, `conmon` and PID 1 | Docker, containerd or Podman hosts |
+
+Per-connection logging is the largest event source the ruleset has. On a busy host it can overflow the kernel backlog, and `--backlog_wait_time 0` then drops events rather than stalling the host. Measured numbers are in [rulesets](rulesets.md#the-cost-of-a-rule).
+
+## auditd.conf
+
+The role edits `/etc/audit/auditd.conf` line by line and leaves every other line alone. An unknown key or value there stops `auditd` from starting, so the two version-dependent values are chosen from the `auditctl -v` the role reads on the host.
+
+| Setting | Value | Why |
+|---|---|---|
+| `name_format` | `hostname` | Every record carries the host name, so the receiver can tell hosts apart. |
+| `log_group` | `adm` on Debian and Ubuntu, `root` elsewhere | rsyslog runs as `syslog` in group `adm` on Ubuntu and must read `audit.log`. |
+| `log_format` | `ENRICHED` on audit 2.8 and later, else `RAW` | ENRICHED resolves uids and syscall numbers to names at write time. |
+| `flush` | `incremental_async` on audit 2.6 and later, else `incremental` | Async flush keeps durability without an fsync on every record. |
+| `freq` | `200` | Records between flushes. |
+| `priority_boost` | `2` at `low`, `4` otherwise | Lower on `low` hosts to leave CPU for the workload. |
+| `max_log_file` | `100` | MB per log file. |
 | `num_logs` | `5` | Rotated files kept. |
-| `max_log_file_action` | `ROTATE` | Rotate rather than halt or suspend on a full log. |
-| `freq` | `200` | Records between flushes -- raised to cut fsync-induced iowait on the write path. |
-| `priority_boost` | `2` (low) / `4` (medium, high) | auditd's scheduling-priority boost. Lowered for `low` so a constrained host keeps more CPU for its workload. |
-| `flush` | `incremental_async` at `auditd >= 2.6`, else `incremental` | Async fsync is the higher-performance durable mode but needs 2.6; el6 (audit 2.4.x) falls back. |
-| `log_format` | `ENRICHED` at `auditd >= 2.8`, else `RAW` | ENRICHED resolves uid/gid/syscall names at write time; older auditd does not support it. |
-
-The version gates exist because an unknown keyword or value in `auditd.conf` is
-**fatal** at daemon start -- there is no per-line skip for it, unlike the ruleset.
-That difference, and the rest of the deploy internals, is covered in
-[ARCHITECTURE.md](../ARCHITECTURE.md).
-
-## See also
-
-- [Getting started](getting-started.md) -- deploy and verify a single host.
-- [Deploying to a fleet](deploying-to-a-fleet.md) -- batched rollout across many
-  hosts.
-- [ARCHITECTURE.md](../ARCHITECTURE.md) -- pipeline, deploy order and the
-  maintainer invariants.
-- [Supported distributions](SUPPORTED-DISTROS.md) -- the distro range.
+| `max_log_file_action` | `ROTATE` | Rotate rather than suspend or halt on a full log. |

@@ -1,10 +1,8 @@
-# HyperI audit collector test harness - EOL Enterprise Linux bake (yum).
-# For el6/el7, which ship YUM (modern EL8+/Amazon Linux use dnf via
-# Dockerfile.el). Installs python3 + sudo + procps-ng + rsyslog + audit via yum.
-# NOTE: el7's default python3 is 3.6, too old for modern ansible-core - a green
-# el7 converge needs a newer interpreter (python38 via SCL/EPEL); tracked as EOL
-# backlog. el6 (python 2.6) is amd64-only and skips on arm64.
-ARG BASE=oraclelinux:7
+# EOL Enterprise Linux target image for yum distros (el6, el7).
+# el7's python3 is 3.6, below ansible-core's target floor, so el7 does not
+# converge yet. el6 is amd64-only.
+# BASE comes from matrix.yml.
+ARG BASE
 FROM ${BASE}
 RUN yum -y install python3 sudo procps-ng rsyslog audit \
  && yum clean all

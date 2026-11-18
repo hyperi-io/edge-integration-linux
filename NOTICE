@@ -5,7 +5,7 @@ This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
 It includes and adapts third-party detection content:
 
-  auditd rulesets (roles/hyperi_audit/files/hyperi-audit-*.rules)
+  auditd ruleset (roles/hyperi_audit/templates/hyperi-audit.rules.j2)
     Forked from Neo23x0 (Florian Roth) "Best Practice Auditd Configuration"
       https://github.com/Neo23x0/auditd  --  Apache License 2.0
     Then merged with deltas from the public baselines: ACSC (ASD) OpenSCAP,
@@ -14,5 +14,5 @@ It includes and adapts third-party detection content:
       https://github.com/SigmaHQ/sigma  --  Detection Rule License 1.1
       https://github.com/SigmaHQ/Detection-Rule-License
 
-Per-file lineage and attribution are recorded in the "# HISTORY." header of
-each ruleset file. Retain these notices in redistributed copies.
+Lineage and attribution are recorded in the "# LINEAGE." header of the
+ruleset template. Retain these notices in redistributed copies.

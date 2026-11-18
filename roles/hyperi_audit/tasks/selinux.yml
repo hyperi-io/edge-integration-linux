@@ -1,0 +1,71 @@
+---
+- name: List the SELinux port labels
+  ansible.builtin.command:
+    argv: [semanage, port, -l]
+  register: hyperi_audit_seports
+  changed_when: false
+
+# A port already labelled any type is left alone: relabelling 6514 away from
+# syslog_tls_port_t would change policy for everything else using it.
+- name: Let rsyslog send to the receiver ports
+  ansible.builtin.command:
+    argv: [semanage, port, -a, -t, syslogd_port_t, -p, tcp, "{{ item }}"]
+  changed_when: true
+  loop: "{{ [hyperi_audit_port_audit, hyperi_audit_port_syslog] | unique }}"
+  when: hyperi_audit_seports.stdout is not search('(?m)^\\S+\\s+tcp\\s+(.*[ ,])?' ~ item ~ '(,|$)')
+
+- name: Check whether the audit log read policy is loaded
+  ansible.builtin.command:
+    argv: [semodule, -l]
+  register: hyperi_audit_semodules
+  changed_when: false
+
+- name: Build and load the audit log read policy
+  when: hyperi_audit_semodules.stdout is not search('(?m)^rsyslog_read_audit_logs(\\s|$)')
+  block:
+    - name: Check for the SELinux policy build tooling
+      ansible.builtin.stat:
+        path: /usr/share/selinux/devel/Makefile
+      register: hyperi_audit_selinux_makefile
+
+    - name: Fail when the policy build tooling is missing
+      ansible.builtin.assert:
+        that:
+          - hyperi_audit_selinux_makefile.stat.exists
+        fail_msg: "SELinux policy build tooling is missing: install policycoreutils-devel (or selinux-policy-devel) for this release"
+        quiet: true
+
+    # mkdtemp: a 0700 root-owned directory with an unpredictable name.
+    - name: Create a private build directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: hyperi_audit_selinux.
+      register: hyperi_audit_selinux_build
+
+    - name: Build and install the policy module
+      block:
+        - name: Copy the policy source
+          ansible.builtin.copy:
+            src: rsyslog_read_audit_logs.te
+            dest: "{{ hyperi_audit_selinux_build.path }}/rsyslog_read_audit_logs.te"
+            owner: root
+            group: root
+            mode: "0600"
+
+        - name: Compile the policy module
+          ansible.builtin.command:
+            argv: [make, -f, /usr/share/selinux/devel/Makefile, rsyslog_read_audit_logs.pp]
+            chdir: "{{ hyperi_audit_selinux_build.path }}"
+          changed_when: true
+
+        - name: Install the policy module
+          ansible.builtin.command:
+            argv: [semodule, -i, "{{ hyperi_audit_selinux_build.path }}/rsyslog_read_audit_logs.pp"]
+          changed_when: true
+          notify: hyperi_audit restart
+
+      always:
+        - name: Remove the build directory
+          ansible.builtin.file:
+            path: "{{ hyperi_audit_selinux_build.path }}"
+            state: absent

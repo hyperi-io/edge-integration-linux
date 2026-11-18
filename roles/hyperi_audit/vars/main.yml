@@ -1,0 +1,50 @@
+---
+# Every directory hyperi-audit.rules.j2 watches. The role checks which exist
+# here: those get a cheap syscall-scoped rule, the rest a path watch.
+hyperi_audit_watch_dirs:
+  - /var/log/audit
+  - /etc/audit
+  - /etc/audisp
+  - /etc/modprobe.d
+  - /etc/sysctl.d
+  - /etc/cron.d
+  - /etc/cron.daily
+  - /etc/cron.hourly
+  - /etc/cron.monthly
+  - /etc/cron.weekly
+  - /var/spool/cron
+  - /var/spool/at
+  - /etc/init.d
+  - /etc/init
+  - /etc/systemd/system
+  - /usr/lib/systemd/system
+  - /etc/systemd
+  - /usr/lib/systemd
+  - /run/systemd/system
+  - /etc/update-motd.d
+  - /etc/udev/rules.d
+  - /etc/xdg/autostart
+  - /etc/sudoers.d
+  - /etc/pam.d
+  - /etc/security/limits.d
+  - /etc/ld.so.conf.d
+  - /etc/profile.d
+  - /etc/ssh/sshd_config.d
+  - /root/.ssh
+  - /etc/sysconfig/network-scripts
+  - /etc/network
+  - /etc/NetworkManager
+  - /etc/rsyslog.d
+  - /etc/selinux
+  - /etc/apparmor
+  - /etc/apparmor.d
+  - /etc/postfix
+  - /etc/exim4
+  - /etc/docker
+  - /var/opt/BESClient
+  - /etc/chef
+  - /etc/salt
+  - /etc/puppet/ssl
+  - /etc/modules-load.d
+  - /usr/lib64/security
+  - /usr/lib/x86_64-linux-gnu/security

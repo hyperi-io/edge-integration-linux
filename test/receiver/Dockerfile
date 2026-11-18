@@ -1,12 +1,8 @@
-# HyperI Linux audit collector - test harness central syslog receiver.
-# One instance persists across the whole test run; each OS-under-test forwards
-# its audit (12201) + syslog (12205) here. Ports the central collector of the
-# old VM test regime (which used a long-lived collector VM).
-#
-# Debian trixie per the HyperI container standard (never Alpine/musl). rsyslog
-# is a plain distro package here - no glibc-wheel concern - and debian-slim is
-# multi-arch (arm64 + amd64) just like the rest of the matrix.
-FROM debian:trixie-slim
+# Test harness syslog receiver: one instance for the whole run, listening for
+# audit (TCP 12201), syslog (TCP 12205) and RELP (20514).
+# The harness passes BASE with a Docker Hub mirror prefix on runners that have one.
+ARG BASE=debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+FROM ${BASE}
 RUN apt-get update \
  && apt-get install -y --no-install-recommends rsyslog rsyslog-relp \
  && rm -rf /var/lib/apt/lists/* \

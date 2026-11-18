@@ -1,0 +1,5 @@
+---
+- name: Mark the audit services for a restart
+  ansible.builtin.set_fact:
+    hyperi_audit_restart_needed: true
+  listen: hyperi_audit restart

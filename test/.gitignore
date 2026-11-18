@@ -4,3 +4,4 @@ collections/
 .pytest_cache/
 __pycache__/
 *.pyc
+lab/.keys/

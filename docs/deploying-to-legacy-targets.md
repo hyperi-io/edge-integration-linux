@@ -1,59 +1,28 @@
-<!--
-Project:      HyperI Linux audit collector
-File:         docs/deploying-to-legacy-targets.md
-Purpose:      Run the role against el6-era hosts from a modern control node --
-              the pinned older ansible and the old-cipher SSH workaround.
-License:      Apache-2.0
-Copyright:    (c) 2026 HYPERI PTY LIMITED
--->
-
 # Deploying to legacy targets
 
-Modern ansible-core cannot talk to an el6-era target: it needs a Python on the
-endpoint that those releases do not ship. Pin an older ansible **on the control
-node** instead - the machine you deploy FROM - and point it at the old hosts.
-
-Nothing needs installing. `uvx` fetches the pinned ansible, and the Python that
-ansible itself needs, into a throwaway environment:
+Current `ansible-core` cannot drive the Python that el6-era hosts ship, so you pin an older Ansible on the control node, the machine you deploy from. `uvx` runs the pinned Ansible, and the Python it needs, in a throwaway environment:
 
 ```sh
 # el6-era targets
-uvx --python 3.10 --from ansible==5.10 ansible-playbook \
-    -i environments/<your-inventory> site.yml
+uvx --python 3.10 --from ansible==5.10 ansible-playbook -i environments/<your-inventory> site.yml
 
-# current targets - the default, no pin needed
+# current targets: no pin
 ansible-playbook -i environments/<your-inventory> site.yml
 ```
 
-Requires [`uv`](https://docs.astral.sh/uv/) on the control node. Nothing else.
+This needs [`uv`](https://docs.astral.sh/uv/) on the control node and nothing else. Keep legacy hosts in an inventory of their own, so each run uses one Ansible.
 
-## Why the pins are what they are
+`ansible==5.10` bundles `ansible-core` 2.12, the last line that reaches those hosts and the floor the role declares in `roles/hyperi_audit/meta/main.yml`. A newer Ansible does not fix an old target, it stops reaching it.
 
-| Target | ansible | Why |
-|---|---|---|
-| el6-era | `5.10` (ansible-core 2.12) | The last line that still speaks to those endpoints |
-| current | whatever is installed | No pin needed |
+`--python 3.10` matters as much. `ansible-core` 2.12 predates the import-hook change in CPython 3.12, so on a newer interpreter it installs and then fails at run time with `'_AnsiblePathHookFinder' object has no attribute 'find_spec'`.
 
-`--python 3.10` is not optional for the pinned line. ansible-core 2.12 predates
-the CPython import-hook change in 3.12, so it installs cleanly against a newer
-interpreter and then fails at run time with
-`'_AnsiblePathHookFinder' object has no attribute 'find_spec'`. Pinning the
-interpreter avoids it; `uv` downloads that interpreter itself.
+## Old SSH key exchange
 
-These pins are **frozen**. See [SUPPORTED-DISTROS.md](SUPPORTED-DISTROS.md) - a
-newer ansible does not fix an old target, it just stops reaching it.
-
-## Old-cipher targets
-
-An old endpoint may refuse a modern SSH handshake: current OpenSSH disables the
-key-exchange algorithms those releases offer. The symptom is
-`no matching key exchange method found`, and the error names the algorithms the
-target actually offered.
-
-Re-enable the one it asks for on the command line rather than weakening the
-control node's global SSH config:
+Current OpenSSH turns off the key-exchange algorithms old hosts offer, so the connection fails with `no matching key exchange method found`, naming what the host offered. Turn on that one algorithm for the run rather than weakening the control node's SSH config:
 
 ```sh
 ansible-playbook -i environments/<your-inventory> site.yml \
     --ssh-common-args='-o KexAlgorithms=+<algorithm from the error>'
 ```
+
+On rsyslog below 7 the role writes the legacy forwarder template, and RELP is not available ([transport](transport.md)).

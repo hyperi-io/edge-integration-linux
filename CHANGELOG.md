@@ -5,68 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The upstream lineage and per-profile merge history live under `# HISTORY.` in the
-headers of `roles/hyperi_audit/files/hyperi-audit-*.rules`. This file tracks the
-project; those track the rules. Entries between 2.5.1 and 3.0.0 were rebuilt from
-the merge order when the pre-git tracking was retired.
-
 ## [Unreleased]
 
 ### Added
 
-- Optional transport (`hyperi_audit_transport`, default `tcp`): plain TCP stays
-  the default and works with every receiver. `relp` adds reliable, acknowledged
-  delivery (`omrelp`) to any RELP receiver; `syslog-tls` wraps the forwards in TLS
-  (`omfwd` + the gtls driver); `relp-tls` does both. TLS trust is
-  `hyperi_audit_tls_mode` (`anon`/`server`/`mutual`) plus CA/cert/key and
-  overridable ports. Plain RELP is tested end to end against a stock `imrelp`
-  receiver; the TLS transports are config-validity tested per packaging family.
-  HyperI's own receivers gain RELP ingest in a future release (#2; dfe-receiver
-  #44) - RELP reaches any standard RELP receiver today. See `docs/transport.md`.
-- Docker test harness (`test/`): one persistent rsyslog receiver plus disposable
-  per-distro containers. Converges the role config-only, seeds a marker into
-  `audit.log`, asserts it forwards to the collector on TCP 12201. Nine current
-  distros green; the EOL bucket is best-effort. Replaces the VM fleet.
-- Profile-selection tests: the role must deploy the ruleset it was asked for
-  (low/medium/high + the internet profile), byte-compared against the source.
-- GitHub Actions workflow for the harness.
+- `hyperi_audit_receiver_address` names the receiver for both streams.
+- Ruleset levels `low`, `medium` and `high`, each holding the one below it, rendered on each host from one template, `roles/hyperi_audit/templates/hyperi-audit.rules.j2`.
+- Overlays in `hyperi_audit_use_cases`: `webserver` logs every command a web server account runs, `edge` drops per-connection logging, `container-host` drops the container runtime's own namespace and mount calls. `hyperi_audit_webserver_users` names the web server accounts.
+- Detections for `process_vm_readv` and `process_vm_writev`, `pidfd_getfd`, `userfaultfd`, any exec from `/dev/shm`, any exec from `/tmp` at `high`, `/etc/rc.local`, writes to `/etc/shadow`, `/etc/environment` and `setcap`.
+- Optional transports in `hyperi_audit_transport`: `syslog-tls`, `relp` and `relp-tls`, with TLS trust in `hyperi_audit_tls_mode` (`anon`, `server`, `mutual`), certificate paths, a permitted peer name, and configurable ports.
+- The run fails before changing the host on a malformed receiver address, port or TLS file path, and after loading rules it logs how many of the merged rules the kernel holds.
+- Tests: a Docker harness over every distro in `test/matrix.yml`, a CI kernel job that loads every rendered ruleset and fires the detections, a lint job, and a VM lab with a syscall benchmark and rule-order probes.
+- Role defaults and Galaxy metadata, and a Renovate config.
 
 ### Changed
 
-- Role renamed `hsaudit` -> `hyperi_audit`; rules, templates, variables and
-  deployed paths follow (`hyperi_audit_*`, `/etc/audit/rules.d/hyperi-audit.rules`,
-  `/etc/rsyslog.d/99-hyperi-rsyslog.conf`). Pre-GA interface change.
-- `hyperi_audit_start_services` gates the service tail so the harness can
-  converge in a container with no init.
-- Deploy tarball is built with `git archive` (tracked files only) instead of
-  tar-from-".". Internal material can no longer reach a customer by omission.
+- The role adds `/etc/audit/rules.d/hyperi-audit.rules` beside the host's rules and leaves the distro's rules in place.
+- A watched directory that exists is written as `-a always,exit -F perm= -F dir=`, which costs about a quarter of a `-w` watch. Median ns per `getppid` with the ruleset loaded, by `test/lab/bench.sh` in 2026-11, before and after: Debian 13 (kernel 6.12) `low` 533 to 352, `medium` 737 to 551, `high` 859 to 626. Rocky 9 (kernel 5.14) `low` 507 to 391, `medium` 745 to 596, `high` 849 to 734.
+- The role is renamed `hsaudit` to `hyperi_audit`, with its variables (`hyperi_audit_*`) and deployed paths (`/etc/audit/rules.d/hyperi-audit.rules`, `/etc/rsyslog.d/99-hyperi-rsyslog.conf`).
+- Services restart only when their config changed or the host is out of step with it.
+- The release artefact is `edge-integration-linux-<git describe>.tar.gz`, built by `build-tarball.sh` from the committed tree with `git archive`.
+- Licensed under Apache-2.0, with third-party attributions in `NOTICE`.
 
-### Fixed
+### Deprecated
 
-- **Escalated execution was not being logged.** The high-frequency excludes match
-  `auid>=1000` + path with no euid scoping and ran BEFORE the `euid=0` root-exec
-  rules; auditd's exit filter is first-match-wins, so `sudo cat /tmp/x` hit the
-  exclude and was never recorded. The 2.9.0 perf pass had been silently masking
-  the detections it sat above. The detections now precede the excludes.
-- **The auditd restart was skipped on every deploy after the first.** The
-  immutable check grepped `/etc/audit/rules.d` for `-e 2` before writing our own
-  ruleset there - and every ruleset we ship ends with `-e 2`, so it detected
-  itself. auditd.conf tuning (priority_boost/flush/freq) therefore never reached
-  any host that had already run the role. The restart is no longer gated on
-  immutability: it only blocks the kernel-side rules, not daemon config.
-- `RefuseManualStop` was left disabled when `hyperi_audit_start_services=false`.
-- `environments/example` did not parse (a value ended in a colon; five host keys
-  were identical), so the shipped inventory template was unusable.
-- Deploy tarball build always exited 1 (tar archived "." while writing into it).
-- `ansible_passowrd` typo in the README's deploy instructions.
-- `docs/SUPPORTED-DISTROS.md` claimed el8 support that nothing tests, and an
-  Ubuntu Pro ESM path that does not exist.
+- `collector_address`. Use `hyperi_audit_receiver_address`.
+- `hyperi_audit_profile_override`. Use `hyperi_audit_level` and `hyperi_audit_use_cases`. `internet` maps to `medium` with the `edge` and `webserver` overlays.
 
 ### Removed
 
-- `deploy/` - the per-distro VM deploy scripts, superseded by the harness.
-- The per-distro inventories; `environments/example` is the template.
-- RHEL/CentOS 5 support and `rhel5-ansible-prep/`.
+- The per-profile rules files `roles/hyperi_audit/files/hyperi-audit-<profile>.rules`, replaced by the template.
+- `deploy/`, the per-distro VM deploy scripts, and the per-distro inventories. `environments/example` is the template.
+- RHEL and CentOS 5 support, and `rhel5-ansible-prep/`.
+
+### Fixed
+
+Forwarding:
+
+- On Ubuntu the audit stream never forwarded: `log_group = root` left `audit.log` at `0600`, and rsyslog runs as `syslog` in `adm`. Debian and Ubuntu use `adm`.
+- A long receiver outage dropped audit records. Each stream has a disk-assisted queue.
+- With `server` or `mutual` TLS and no permitted peer, the endpoint accepted any certificate the CA signed. It checks the name, which defaults to the receiver address.
+- On el6 the audit stream also went out on the syslog port.
+- On EL 8 and later and Amazon Linux, rsyslog parsed the drop-in twice.
+
+Rules:
+
+- el6 never loaded `rules.d`. The role sets `USE_AUGENRULES="yes"`.
+- On audit 4 (Debian 13) a restart never reloaded the rules. The role runs `augenrules --load`.
+- The message-type excludes never loaded in any release, because an exclude rule takes no key.
+- The setuid-exec rule missed most setuid runs, and `fexecve` and `execveat` got past the exec-location rules.
+- Escalated execution was not logged: the session excludes sat above the `euid=0` exec rules, and the first match won.
+
+Services:
+
+- `RefuseManualStop` toggling edited the packaged auditd unit and left systemd's loaded state at `no`. A drop-in under `/run` lifts it for the restart.
+- Debian and Ubuntu auditd units got `RefuseManualStop` appended under `[Install]`. The role removes it.
+- The auditd restart was skipped on every deploy after the first, and a failed run lost its pending restart. The restart is decided from the host's state.
+- The role restarted services on every run.
+
+Packaging:
+
+- `environments/example` did not parse.
+- `build-tarball.sh` always exited 1.
 
 ## [3.0.0] - 2026-07-16
 

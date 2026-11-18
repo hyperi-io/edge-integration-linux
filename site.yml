@@ -1,3 +1,5 @@
-- hosts: all
+---
+- name: Deploy the audit ruleset and forwarder
+  hosts: all
   roles:
-  - role: hyperi_audit
+    - role: hyperi_audit

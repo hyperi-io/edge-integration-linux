@@ -1,194 +1,69 @@
 # edge-integration-linux
 
-Ansible deployment that turns a Linux endpoint into an audit source for a central
-syslog receiver. It installs and configures `auditd` and `rsyslog`, applies a
-chosen audit ruleset, and forwards audit and system events to the receiver over
-TCP - across current distros and end-of-life ones alike.
+Ansible role that audits Linux hosts with auditd and forwards audit and syslog to EdgeStream Hub or any syslog receiver.
 
-The receiver is any syslog daemon that accepts forwarded TCP syslog - HyperI's is
-the [Edge Stream Hub](https://hyperi.io), but rsyslog, syslog-ng or any
-equivalent works. The role assumes nothing about it beyond a reachable
-`collector_address`.
+[![CI](https://github.com/hyperi-io/edge-integration-linux/actions/workflows/test-harness.yml/badge.svg)](https://github.com/hyperi-io/edge-integration-linux/actions/workflows/test-harness.yml) [![Licence](https://img.shields.io/badge/licence-Apache--2.0-blue?style=flat)](LICENSE)
 
-Two names are in play and they genuinely differ: this repository is
-`edge-integration-linux`, and the deployment artefact it builds is
-`hyperi-collector-endpoint-linux-<version>.tar.gz`.
+## What it does
+
+The `hyperi_audit` role installs and tunes auditd and rsyslog from the host's distro packages, renders an audit ruleset for that host, and forwards two streams to your receiver: audit records on TCP 12201 and everything else rsyslog sees on TCP 12205. It adds its rules beside whatever the host already has, and reaches back to RHEL 6 because the oldest hosts are the ones that most need watching.
+
+- Three cumulative ruleset levels, `low`, `medium` and `high`, keyed by MITRE ATT&CK technique, with SigmaHQ's keys added where its auditd rules match on them.
+- Overlays for web servers, internet-facing hosts and container hosts.
+- Plain TCP by default, with syslog over TLS, RELP, and RELP over TLS as options.
+- A disk-assisted queue per stream, so a receiver outage spools records rather than dropping them.
+- Nothing installed beyond distro packages, and no agent on the host.
+
+EdgeStream Hub is HyperI's syslog receiver (https://hyperi-io.github.io/edgestream-hub/). Any receiver that takes syslog over TCP works.
 
 ## Quick start
 
-You need `ansible` on a control node. Nothing is installed on the endpoints
-beyond their own distro's `rsyslog` and `audit` packages.
-
-From a clone, or from an extracted deployment tarball, in the directory that
-holds `site.yml`:
-
-```sh
-ansible-playbook --syntax-check -i environments/example site.yml
-```
-
-Expected output:
-
-```
-playbook: site.yml
-```
-
-That confirms ansible, the playbook and the inventory template all parse. Copy
-`environments/example`, fill in your hosts and collector, and you are ready to
-deploy - see [Deploying](#deploying).
-
-## What it does, and why
-
-The role installs `rsyslog` and `audit`, tunes `auditd.conf`, deploys an audit
-ruleset, and writes an rsyslog drop-in that forwards to your collector. On
-SELinux hosts it also permits the collector ports and installs a policy module
-so rsyslog may read the audit log. The deployed footprint is deliberately small:
-fewer moving parts means fewer inter-distro incompatibilities, fewer version
-dependency breakages, and less local disk consumed.
-
-Audit events travel `auditd -> file -> rsyslog`, not `audisp-remote`. audisp is
-fragmented across the supported range - a separate daemon and plugin directory
-in audit 2.x, merged into `auditd` in audit 3.x - whereas `rsyslog` is present
-and stable on every target, and the collector is a syslog receiver that consumes
-syslog-shaped lines. Full reasoning:
-[ADR 0001](./docs/decisions/0001-auditd-to-file-to-rsyslog-not-audisp.md).
-
-```text
-  auditd
-    |  writes
-    v
-  /var/log/audit/audit.log
-    |  rsyslog imfile tails
-    v
-  rsyslog  <--- local system log sources
-    |
-    +-- omfwd TCP 12201 (audit)  --> Syslog receiver (HyperI Edge Stream Hub)
-    +-- omfwd TCP 12205 (syslog) --> Syslog receiver (HyperI Edge Stream Hub)
-```
-
-Audit records go to TCP 12201, everything else to TCP 12205.
-
-## Audit profiles
-
-Three levels plus a use-case profile. Breadth costs host CPU and forwarding
-bandwidth, so pick for the host rather than defaulting to the widest.
-
-| Profile | Selected with | For | Trade-off |
-|---|---|---|---|
-| low | `hyperi_audit_level: low` | Constrained hosts, slow links | High-signal file and exec watches plus the cheapest kernel TTPs. The high-volume syscall auditing (per-connection network, DAC permission changes, user file deletion, IPC) is removed. |
-| medium | `hyperi_audit_level: medium` (default) | The general fleet | Balanced host telemetry. The starting point unless you have a reason. |
-| high | `hyperi_audit_level: high` | High-value hosts that can carry it | medium plus interpreter exec, the full setuid/DAC syscall family, IPC, recon tooling, data staging, session/PAM and third-party agents. Not for constrained or slow-link endpoints. |
-| internet | `hyperi_audit_profile_override: internet` | Internet-facing edge hosts - web servers, reverse proxies, bastions | medium with per-connection network logging removed, on the assumption an edge NIPS and firewall already carry that telemetry. Everything else is retained. |
-
-`hyperi_audit_profile_override` *replaces* the level's ruleset rather than
-layering on it, so setting it makes `hyperi_audit_level` moot. The role warns
-when you set both.
-
-The rulesets themselves carry their lineage, their MITRE ATT&CK mappings and
-their traps in the `# HISTORY.` header of each
-`roles/hyperi_audit/files/hyperi-audit-*.rules` file. See
-[ARCHITECTURE.md](./ARCHITECTURE.md) for how the profiles are put together.
-
-## Configuration
-
-Role variables, set in your inventory's `vars:` block or via `--extra-vars`.
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `collector_address` | none - **required** | IP or DNS name of the collector receiving forwarded events. The run fails immediately if unset. |
-| `hyperi_audit_level` | `medium` | Audit profile: `low`, `medium` or `high`. Any other value fails the run. |
-| `hyperi_audit_profile_override` | unset | Replaces the level's ruleset with a named use-case profile; `internet` is the one shipped. An unknown value fails the run. Formerly `hyperi_audit_use_case`. |
-| `hyperi_audit_transport` | `tcp` | Transport: `tcp` (plain syslog, the default, works everywhere), `relp` (reliable), `syslog-tls` (encrypted) or `relp-tls` (both). The opt-ins and their trust models are in [docs/transport.md](./docs/transport.md). |
-| `hyperi_audit_start_services` | `true` | `false` writes the configuration but does not enable, stop or start `auditd` and `rsyslog`. Used by the test harness to converge inside a container that has no init. |
-
-The transport is **plaintext by default**. Two opt-ins sit on top: `relp` adds
-reliable, acknowledged delivery (to any RELP receiver) and `syslog-tls` adds
-encryption; `relp-tls` does both - see [docs/transport.md](./docs/transport.md).
-HyperI's own receivers gain RELP ingest in a future release
-([#2](https://github.com/hyperi-io/edge-integration-linux/issues/2)); RELP
-reaches any standard RELP receiver today.
-
-## Deploying
-
-Copy the inventory template, name the copy for your site, and fill in the hosts
-and `collector_address`:
+You need Ansible on the machine you deploy from, and SSH access to each host as an account that can `sudo`. From a clone of this repo:
 
 ```sh
 cp environments/example environments/mysite
+# edit environments/mysite: your hosts and hyperi_audit_receiver_address
+ansible-playbook --syntax-check -i environments/mysite site.yml
 ```
 
-`environments/example` is YAML and documents its own placeholders. A filled-in
-inventory with a profile and credentials looks like:
-
-```yaml
-all:
-  hosts:
-    "10.0.0.11":
-    "10.0.0.12":
-  vars:
-    collector_address: "10.0.0.9"
-    hyperi_audit_level: "high"
-    ansible_user: "user"
-    ansible_password: "password"
-```
-
-Then deploy:
+The check prints `playbook: site.yml`. Then deploy:
 
 ```sh
-ansible-playbook -i environments/mysite site.yml
+ansible-playbook -i environments/mysite site.yml -K
 ```
 
-Useful variations:
+[Getting started](docs/getting-started.md) walks one host through it and shows how to check records reach the receiver.
 
-- Credentials outside the inventory file:
-  `--extra-vars "ansible_user=user ansible_password=password"`
-- Prompt for the privilege escalation password: `-K` (the role escalates to root)
-- Skip SSH host key checking:
-  `--ssh-common-args='-o StrictHostKeyChecking=no'`
+## Configuration
 
-### Building the deploy tarball (maintainers)
+Most deployments set two or three of these. Every variable is in [docs/configuration.md](docs/configuration.md).
 
-`./build-tarball.sh` produces the customer artefact from committed state using
-`git archive`. The script is `export-ignore`d, so it is not present in the
-tarball itself - this section is for people working in the repository.
+| Variable | Default | Sets |
+|---|---|---|
+| `hyperi_audit_receiver_address` | none, required | The receiver's host name or IP. |
+| `hyperi_audit_level` | `medium` | `low`, `medium` or `high`. |
+| `hyperi_audit_use_cases` | `[]` | Overlays: `webserver`, `edge`, `container-host`. |
+| `hyperi_audit_transport` | `tcp` | `tcp`, `syslog-tls`, `relp` or `relp-tls`. |
+| `hyperi_audit_port_audit`, `hyperi_audit_port_syslog` | `12201`, `12205` | The receiver's ports for each stream. |
 
-## Supported distributions
+Read [security considerations](docs/security-considerations.md) before production: the default transport is cleartext, and the role locks the host's audit rules until reboot.
 
-The automatable floor is CentOS/RHEL 6, and current mainstream distros are
-supported alongside an end-of-life bucket. [`test/matrix.yml`](test/matrix.yml)
-is the source of truth for what is actually tested; the prose view, the
-supported floor and the known gaps are in
-[docs/SUPPORTED-DISTROS.md](./docs/SUPPORTED-DISTROS.md).
+## Documentation
 
-The oldest targets constrain the *control node*, not just the endpoint: their
-Python predates what current `ansible-core` will drive, so deploying to them
-needs a pinned, older ansible on the machine you deploy from. A python or
-library version error on an old target is almost always this, and an old
-endpoint may also refuse a modern SSH key exchange. Both have one-line answers
-in [docs/deploying-to-legacy-targets.md](./docs/deploying-to-legacy-targets.md).
+- [docs/README.md](docs/README.md) maps every page.
+- [Architecture](docs/architecture.md) and [rulesets](docs/rulesets.md) explain how it works.
+- [Deploying to a fleet](docs/deploying-to-a-fleet.md) and [legacy targets](docs/deploying-to-legacy-targets.md) cover rollout.
+- [Supported distributions](docs/supported-distros.md) lists what is tested.
+- [CHANGELOG.md](CHANGELOG.md) records each release.
 
-## Testing
+## Getting help
 
-[`test/`](test/) is a Docker harness: a persistent rsyslog receiver plus
-disposable per-distro containers, driven by pytest. It converges the role
-config-only, seeds a marker into `audit.log`, and asserts it reaches the
-receiver. It needs only `docker` and `uv`; run it with `test/run.sh`.
+Open an issue at https://github.com/hyperi-io/edge-integration-linux/issues.
 
-Read [test/README.md](./test/README.md) before trusting a green run - it is
-explicit about what the harness does not cover.
+## Contributing
 
-## Versioning
+Changes are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has the lint and test commands, and what to watch for in the ruleset.
 
-Semantic Versioning and Changelog applied as per:
-https://semver.org/
-https://www.gitkraken.com/gitkon/semantic-versioning-git-tags
-https://keepachangelog.com
+## Licence
 
-## Links
-
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - how the pieces fit together
-- [ADR 0001](./docs/decisions/0001-auditd-to-file-to-rsyslog-not-audisp.md) - why `auditd -> file -> rsyslog`, not audisp
-- [docs/SUPPORTED-DISTROS.md](./docs/SUPPORTED-DISTROS.md) - the distro range and why EOL releases are in it
-- [docs/deploying-to-legacy-targets.md](./docs/deploying-to-legacy-targets.md) - deploying to old targets from a modern control node
-- [test/README.md](./test/README.md) - the test harness
-- [CHANGELOG.md](./CHANGELOG.md)
-- [LICENSE](./LICENSE) - Apache License 2.0
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -1,0 +1,31 @@
+---
+# Renders the audit ruleset for one level and overlay set, for this host's
+# directories. test_kernel.py passes -e out=<file> -e level=<level> -e use_cases=<list>.
+- name: Render the audit ruleset
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    hyperi_audit_effective_level: "{{ level }}"
+    hyperi_audit_effective_use_cases: "{{ use_cases | default([]) }}"
+    hyperi_audit_webserver_uids: "{{ webserver_uids | default([33]) }}"
+  tasks:
+    - name: Load the role's directory list
+      ansible.builtin.include_vars:
+        file: ../roles/hyperi_audit/vars/main.yml
+
+    - name: Check which watched directories exist
+      ansible.builtin.command:
+        argv: "{{ ['find', '-L'] + hyperi_audit_watch_dirs + ['-maxdepth', '0', '-type', 'd'] }}"
+      register: dir_find
+      changed_when: false
+      failed_when: false
+      become: true
+
+    - name: Write the rendered ruleset
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../roles/hyperi_audit/templates/hyperi-audit.rules.j2') }}"
+        dest: "{{ out }}"
+        mode: "0644"
+      vars:
+        hyperi_audit_present_dirs: "{{ dir_find.stdout_lines | intersect(hyperi_audit_watch_dirs) }}"

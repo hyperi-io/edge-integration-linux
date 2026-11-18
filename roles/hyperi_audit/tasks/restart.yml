@@ -1,0 +1,86 @@
+---
+# The auditd unit sets RefuseManualStop=yes on EL. A runtime drop-in lifts it for
+# this restart only: /run clears on reboot, and the always: section removes it.
+- name: Restart auditd and rsyslog, then load the rules
+  block:
+    - name: Lift RefuseManualStop for this run
+      when: hyperi_audit_init.stdout == 'systemd'
+      block:
+        - name: Create the runtime drop-in directory
+          ansible.builtin.file:
+            path: /run/systemd/system/auditd.service.d
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Write the RefuseManualStop drop-in
+          ansible.builtin.copy:
+            dest: /run/systemd/system/auditd.service.d/10-hyperi-allow-stop.conf
+            content: "[Unit]\nRefuseManualStop=no\n"
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Reload systemd with the drop-in
+          ansible.builtin.systemd:
+            daemon_reload: true
+
+    # auditd.conf is read at daemon start, so this applies even on a locked kernel.
+    - name: Restart auditd
+      ansible.builtin.service:
+        name: auditd
+        state: restarted
+
+    # audit 4.x loads rules from a separate oneshot unit, so the restart above
+    # does not reload them. A locked kernel refuses new rules until reboot.
+    - name: Load the audit rules
+      ansible.builtin.command:
+        argv: [augenrules, --load]
+      changed_when: true
+      when: not hyperi_audit_immutable | bool
+
+    - name: Restart rsyslog
+      ansible.builtin.service:
+        name: rsyslog
+        state: restarted
+
+  always:
+    - name: Remove the RefuseManualStop drop-in
+      ansible.builtin.file:
+        path: /run/systemd/system/auditd.service.d/10-hyperi-allow-stop.conf
+        state: absent
+      when: hyperi_audit_init.stdout == 'systemd'
+
+    - name: Reload systemd without the drop-in
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: hyperi_audit_init.stdout == 'systemd'
+
+- name: Compare the loaded rules with the merged ruleset
+  when: not hyperi_audit_immutable | bool
+  block:
+    - name: List the rules the kernel holds
+      ansible.builtin.command:
+        argv: [auditctl, -l]
+      register: hyperi_audit_loaded
+      changed_when: false
+
+    - name: Read the merged ruleset augenrules built
+      ansible.builtin.slurp:
+        src: /etc/audit/audit.rules
+      register: hyperi_audit_merged
+
+    # -i skips rules an old kernel does not know, so a shortfall is expected on
+    # el6 and el7. On a current kernel it means a rule failed to parse.
+    - name: Report how many rules loaded
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'WARNING: ' if hyperi_audit_held < hyperi_audit_merged_count else '' }}Kernel holds
+          {{ hyperi_audit_held }} of the {{ hyperi_audit_merged_count }} rules in /etc/audit/audit.rules.
+          {% if hyperi_audit_merged_lines[-1:] != ['-e 2'] %}WARNING: the merged ruleset does not end
+          in -e 2, so a later rules.d file unlocks it.{% endif %}
+      vars:
+        hyperi_audit_merged_lines: "{{ (hyperi_audit_merged.content | b64decode).splitlines() | reject('match', '^\\s*(#|$)') | list }}"
+        hyperi_audit_merged_count: "{{ hyperi_audit_merged_lines | select('match', '^-(a|w) ') | list | length }}"
+        hyperi_audit_held: "{{ hyperi_audit_loaded.stdout_lines | select('match', '^-(a|w) ') | list | length }}"
