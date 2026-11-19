@@ -2,6 +2,12 @@
 
 All notable changes to this project are recorded in this file. semantic-release writes each entry from the Conventional Commits merged since the release before it, and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.1](https://github.com/hyperi-io/edge-integration-linux/compare/v4.0.0...v4.0.1) (2026-11-19)
+
+### Bug Fixes
+
+* **test:** wait for auditd before counting kernel events ([27b51e3](https://github.com/hyperi-io/edge-integration-linux/commit/27b51e31fe3462809c7c5d946e879d2c097a5ed3))
+
 ## 4.0.0 (2026-11-19)
 
 ### Added
