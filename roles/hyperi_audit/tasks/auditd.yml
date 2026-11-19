@@ -1,0 +1,136 @@
+---
+# auditctl -s prints "enabled=2" (audit 2.x) or "enabled 2" (3.x and later) on a
+# locked kernel. Without audit netlink, as in a container, it fails or blocks, so
+# it runs under a timeout and anything but success reads as unlocked.
+- name: Check whether the kernel audit config is locked
+  ansible.builtin.command:
+    argv: [timeout, "10", auditctl, -s]
+  register: hyperi_audit_status
+  changed_when: false
+  failed_when: false
+
+- name: Record the lock state
+  ansible.builtin.set_fact:
+    hyperi_audit_immutable: "{{ hyperi_audit_status.rc == 0 and hyperi_audit_status.stdout is search('enabled[ =]2') }}"
+
+- name: Warn that a locked kernel loads the new rules only after a reboot
+  ansible.builtin.debug:
+    msg: >-
+      The kernel audit config is locked (enabled=2). auditd.conf changes apply on
+      this run's restart; the new rules load at the next reboot.
+  when: hyperi_audit_immutable | bool
+
+# log_group: Debian rsyslog runs as a member of adm and must read audit.log.
+# ENRICHED needs audit 2.8. incremental_async needs 2.6. priority_boost 4 is the
+# auditd default, 2 keeps the low level lighter.
+- name: Tune auditd.conf
+  ansible.builtin.lineinfile:
+    path: /etc/audit/auditd.conf
+    regexp: '^\s*{{ item.key }}\s*='
+    line: "{{ item.key }} = {{ item.value }}"
+    state: present
+  loop: "{{ hyperi_audit_auditd_conf | dict2items }}"
+  vars:
+    hyperi_audit_auditd_conf:
+      name_format: hostname
+      priority_boost: "{{ '2' if hyperi_audit_effective_level == 'low' else '4' }}"
+      log_group: "{{ 'adm' if ansible_facts['os_family'] == 'Debian' else 'root' }}"
+      log_format: "{{ 'ENRICHED' if hyperi_audit_auditd_version is version('2.8', '>=') else 'RAW' }}"
+      max_log_file_action: ROTATE
+      max_log_file: "100"
+      num_logs: "5"
+      flush: "{{ 'incremental_async' if hyperi_audit_auditd_version is version('2.6', '>=') else 'incremental' }}"
+      freq: "200"
+  loop_control:
+    label: "{{ item.key }}"
+  notify: hyperi_audit restart
+
+# The el6 init script loads /etc/audit/audit.rules directly unless this is yes,
+# so rules.d would otherwise never load there.
+- name: Check for the init-script augenrules switch
+  ansible.builtin.command:
+    argv: [grep, -q, '^USE_AUGENRULES=', /etc/sysconfig/auditd]
+  register: hyperi_audit_use_augenrules
+  changed_when: false
+  failed_when: false
+
+- name: Have the init script build rules from rules.d
+  ansible.builtin.lineinfile:
+    path: /etc/sysconfig/auditd
+    regexp: '^USE_AUGENRULES='
+    line: 'USE_AUGENRULES="yes"'
+  when: hyperi_audit_use_augenrules.rc == 0
+  notify: hyperi_audit restart
+
+# Earlier releases of this role toggled RefuseManualStop in the vendor unit file.
+# Where the unit has no such line they appended it under [Install], where
+# systemd rejects it.
+- name: Find the vendor auditd unit
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: hyperi_audit_vendor_units
+  loop:
+    - /usr/lib/systemd/system/auditd.service
+    - /lib/systemd/system/auditd.service
+
+- name: Restore RefuseManualStop in the vendor unit
+  ansible.builtin.replace:
+    path: "{{ item.stat.path }}"
+    regexp: '^RefuseManualStop=no$'
+    replace: RefuseManualStop=yes
+  loop: "{{ hyperi_audit_vendor_units.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  notify: hyperi_audit restart
+
+- name: Remove RefuseManualStop lines from the vendor unit's [Install] section
+  ansible.builtin.replace:
+    path: "{{ item.stat.path }}"
+    regexp: '(\[Install\][^\[]*?)\nRefuseManualStop=(?:yes|no)'
+    replace: '\1'
+  loop: "{{ hyperi_audit_vendor_units.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  notify: hyperi_audit restart
+
+- name: Look up the web server accounts
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ item }}"
+    fail_key: false
+  loop: "{{ hyperi_audit_webserver_users }}"
+  register: hyperi_audit_webserver_lookup
+  when: "'webserver' in hyperi_audit_effective_use_cases"
+
+- name: Record the web server uids
+  ansible.builtin.set_fact:
+    hyperi_audit_webserver_uids: >-
+      {{ hyperi_audit_webserver_lookup.results | default([])
+         | selectattr('ansible_facts', 'defined')
+         | map(attribute='ansible_facts.getent_passwd')
+         | map('dict2items') | flatten
+         | selectattr('value', 'truthy')
+         | map(attribute='value.1') | map('int') | unique | sort }}
+
+- name: Warn when the webserver overlay finds no web server account
+  ansible.builtin.debug:
+    msg: >-
+      webserver overlay: none of {{ hyperi_audit_webserver_users }} exists here, so no
+      webshell rules were added. Set hyperi_audit_webserver_users to the account the
+      web server runs as.
+  when:
+    - "'webserver' in hyperi_audit_effective_use_cases"
+    - hyperi_audit_webserver_uids | length == 0
+
+- name: Read the directories and syscall tables the ruleset depends on
+  ansible.builtin.import_tasks: host_probe.yml
+
+- name: Write the audit ruleset
+  ansible.builtin.template:
+    src: hyperi-audit.rules.j2
+    dest: /etc/audit/rules.d/hyperi-audit.rules
+    owner: root
+    group: root
+    mode: "0640"
+  register: hyperi_audit_rules_written
+  notify: hyperi_audit restart

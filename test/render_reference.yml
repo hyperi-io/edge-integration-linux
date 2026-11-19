@@ -1,0 +1,46 @@
+---
+# Writes rules/hyperi-audit-<profile>.rules: the ruleset for any x64 or arm64
+# host, for use without Ansible. test_reference.py fails when they drift.
+#   cd test && uv run ansible-playbook render_reference.yml
+- name: Render the reference rulesets
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_managed: >-
+      Generated from roles/hyperi_audit/templates/hyperi-audit.rules.j2 by
+      test/render_reference.yml. Do not edit.
+    out_dir: "{{ playbook_dir }}/../rules"
+    template_src: "{{ playbook_dir }}/../roles/hyperi_audit/templates/hyperi-audit.rules.j2"
+    profiles:
+      low: {level: low, use_cases: []}
+      medium: {level: medium, use_cases: []}
+      high: {level: high, use_cases: []}
+      internet: {level: medium, use_cases: [edge, webserver]}
+    # www-data on Debian and Ubuntu, apache on EL.
+    hyperi_audit_webserver_uids: [33, 48]
+    hyperi_audit_user_homes: []
+    portable: "{{ lookup('ansible.builtin.file', 'portable-syscalls.txt').splitlines() | reject('match', '#') | list }}"
+  tasks:
+    - name: Load the role's defaults
+      ansible.builtin.include_vars:
+        file: ../roles/hyperi_audit/defaults/main.yml
+
+    - name: Load the role's directory list
+      ansible.builtin.include_vars:
+        file: ../roles/hyperi_audit/vars/main.yml
+
+    # Every directory takes the cheap dir= form. One a host lacks fails to load
+    # and -i skips it.
+    - name: Write each profile
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.template', template_src) | hyperi_audit_split_syscalls(portable) }}"
+        dest: "{{ out_dir }}/hyperi-audit-{{ item.key }}.rules"
+        mode: "0644"
+      loop: "{{ profiles | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      vars:
+        hyperi_audit_effective_level: "{{ item.value.level }}"
+        hyperi_audit_effective_use_cases: "{{ item.value.use_cases }}"
+        hyperi_audit_present_dirs: "{{ hyperi_audit_watch_dirs }}"

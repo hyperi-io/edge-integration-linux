@@ -1,8 +1,8 @@
 name: audit-collector-test-harness
 
-# Runs the Docker test harness (test/) on an x64 runner, so the FULL matrix -
-# el6/el7 included - runs natively. Current distros are required; the EOL bucket
-# is best-effort (continue-on-error), matching the "backlog if it fights" policy.
+# GitHub-hosted runners by default. GH_RUNNER_MODE=self-hosted (hyperi-ci's
+# variable) selects the self-hosted runner instead. Fork PRs run their own copy
+# of this file, so the runner group's repository access is what keeps them off.
 
 on:
   pull_request:
@@ -10,38 +10,108 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# The harness only ever reads the repo and talks to the local docker daemon.
 permissions:
   contents: read
 
 jobs:
-  current:
-    name: current distros (required)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  lint:
+    name: lint
+    runs-on: ${{ (vars.GH_RUNNER_MODE == 'self-hosted' && !github.event.pull_request.head.repo.fork) && (vars.GH_RUNNER_PYTHON || vars.GH_RUNNER_DEFAULT) || 'ubuntu-latest' }}
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-      - name: Run harness (current distros)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Install the lint toolchain
         working-directory: test
-        run: ./run.sh -m "not eol" --tb=short
+        run: uv sync --locked --group lint
+      - name: ansible-lint
+        run: test/.venv/bin/ansible-lint
+      - name: ruff and ty
+        working-directory: test
+        run: |
+          .venv/bin/ruff format --check . ../roles/hyperi_audit/filter_plugins
+          .venv/bin/ruff check . ../roles/hyperi_audit/filter_plugins
+          .venv/bin/ty check . ../roles/hyperi_audit/filter_plugins
+      - name: Reference rulesets current, each level holding the one below
+        working-directory: test
+        run: uv run --locked --group lint pytest test_reference.py --tb=short
+      - name: shellcheck
+        run: test/.venv/bin/shellcheck build-tarball.sh test/run.sh test/lab/*.sh
+      - name: hadolint
+        run: test/.venv/bin/hadolint test/images/Dockerfile.* test/receiver/Dockerfile
+      - name: actionlint
+        run: test/.venv/bin/actionlint
 
-  # continue-on-error is deliberate: the EOL bucket is KNOWN not to converge
-  # today (el7/ubuntu-18.04/20.04 ship a python3 older than ansible-core's floor,
-  # and the EOL Ubuntu bakes need apt pointed at old-releases). Without it, CI is
-  # permanently red and stops meaning anything. The cost is that this job can
-  # stay broken unnoticed -- it is not a required check and nothing reports on it.
-  # See docs/SUPPORTED-DISTROS.md "Known gaps"; the fix is tracked separately.
-  eol:
-    name: EOL distros (best-effort)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    continue-on-error: true
+  # Loads every rendered ruleset into the runner's own kernel (a disposable VM)
+  # and fires each detection. Always GitHub-hosted: it needs sudo and a kernel
+  # nothing else shares.
+  # arm64 runners are free for public repos only, so a private repo runs x64.
+  kernel:
+    name: kernel (${{ matrix.runner }})
+    needs: lint
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON(github.event.repository.private && '["ubuntu-latest"]' || '["ubuntu-latest", "ubuntu-24.04-arm"]') }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-      - name: Run harness (EOL bucket, best-effort)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Install auditd
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q auditd
+          sudo systemctl start auditd
+      - name: Load and fire the rulesets
         working-directory: test
-        run: ./run.sh -m "eol" --tb=short
+        env:
+          HYPERI_AUDIT_KERNEL_TESTS: "1"
+        run: uv run --locked pytest -m kernel test_kernel.py --tb=short
+
+  # One job per bucket. EOL is best-effort (continue-on-error): el7 and Ubuntu
+  # 18.04/20.04 ship a python3 below ansible-core's target floor, so that job
+  # stays red until docs/supported-distros.md "Known gaps" is closed.
+  harness:
+    name: harness (${{ matrix.bucket }})
+    needs: lint
+    runs-on: ${{ (vars.GH_RUNNER_MODE == 'self-hosted' && !github.event.pull_request.head.repo.fork) && (vars.GH_RUNNER_IMAGE_BUILDER || vars.GH_RUNNER_DEFAULT) || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    continue-on-error: ${{ matrix.bucket == 'eol' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - bucket: current
+            select: not eol
+          - bucket: eol
+            select: eol
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Use the Docker Hub mirror where it is reachable
+        # The mirror is reachable from self-hosted runners only.
+        if: vars.HYPERCI_DOCKERHUB_MIRROR != '' && runner.environment == 'self-hosted'
+        env:
+          MIRROR: ${{ vars.HYPERCI_DOCKERHUB_MIRROR }}
+        run: |
+          hostport="${MIRROR%%/*}"
+          host="${hostport%:*}"
+          port=443
+          [[ "$hostport" == *:* ]] && port="${hostport##*:}"
+          if timeout 3 bash -c ": </dev/tcp/$host/$port" 2>/dev/null; then
+            echo "HYPERCI_DOCKERHUB_MIRROR=$MIRROR" >> "$GITHUB_ENV"
+          else
+            echo "::notice::$hostport is unreachable from this runner, so the harness pulls from Docker Hub"
+          fi
+      - name: Run the harness
+        working-directory: test
+        env:
+          SELECT: ${{ matrix.select }}
+        run: ./run.sh -m "$SELECT" --tb=short

@@ -1,0 +1,103 @@
+---
+- name: Pick the auditd package name
+  ansible.builtin.set_fact:
+    hyperi_audit_auditd_package: "{{ 'auditd' if ansible_facts['os_family'] == 'Debian' or ansible_facts['distribution'] == 'SLES' else 'audit' }}"
+    hyperi_audit_selinux_enabled: "{{ ((ansible_facts['selinux'] | default({})).status | default('disabled')) == 'enabled' }}"
+
+# A fresh Debian or Ubuntu cloud image has an empty package index.
+- name: Refresh the apt package index
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  changed_when: false
+  when: ansible_facts['os_family'] == 'Debian'
+
+# latest: every run brings rsyslog and audit up to the distro's current release.
+- name: Install rsyslog and auditd
+  ansible.builtin.package:
+    name:
+      - rsyslog
+      - "{{ hyperi_audit_auditd_package }}"
+    state: latest # noqa: package-latest
+  register: hyperi_audit_install
+  retries: 6
+  delay: 10
+  until: hyperi_audit_install is success
+  notify: hyperi_audit restart
+
+- name: Read the rsyslog version
+  ansible.builtin.command:
+    argv: [rsyslogd, -v]
+  register: hyperi_audit_rsyslogd_v
+  changed_when: false
+
+# ausearch, not auditctl: auditctl needs CAP_AUDIT_CONTROL even to print its version.
+- name: Read the auditd version
+  ansible.builtin.command:
+    argv: [ausearch, -v]
+  register: hyperi_audit_auditctl_v
+  changed_when: false
+
+- name: Record the versions
+  ansible.builtin.set_fact:
+    hyperi_audit_rsyslog_version: "{{ hyperi_audit_rsyslogd_v.stdout | regex_search('[0-9]+\\.[0-9]+(\\.[0-9]+)?') }}"
+    hyperi_audit_auditd_version: "{{ hyperi_audit_auditctl_v.stdout | regex_search('[0-9]+\\.[0-9]+(\\.[0-9]+)?') }}"
+
+- name: Fail when a version could not be read
+  ansible.builtin.assert:
+    that:
+      - hyperi_audit_rsyslog_version | length > 0
+      - hyperi_audit_auditd_version | length > 0
+    fail_msg: >-
+      could not parse versions from `rsyslogd -v` ({{ hyperi_audit_rsyslogd_v.stdout_lines | first | default('') }})
+      or `ausearch -v` ({{ hyperi_audit_auditctl_v.stdout_lines | first | default('') }})
+    quiet: true
+
+- name: Choose the legacy rsyslog template below rsyslog 7
+  ansible.builtin.set_fact:
+    hyperi_audit_rsyslog_legacy: "{{ hyperi_audit_rsyslog_version is version('7', '<') }}"
+
+- name: Log the versions
+  ansible.builtin.debug:
+    msg: "rsyslog {{ hyperi_audit_rsyslog_version }}{{ ' (legacy template)' if hyperi_audit_rsyslog_legacy else '' }}, auditd {{ hyperi_audit_auditd_version }}"
+
+# librelp on the rsyslog <7 floor is too old or absent.
+- name: Reject RELP on the legacy rsyslog floor
+  ansible.builtin.assert:
+    that:
+      - not (hyperi_audit_transport in ['relp', 'relp-tls'] and hyperi_audit_rsyslog_legacy)
+    fail_msg: >-
+      relp and relp-tls need rsyslog 7 or later with librelp, but this host runs rsyslog
+      {{ hyperi_audit_rsyslog_version }}. Use hyperi_audit_transport=syslog-tls or tcp here.
+    quiet: true
+
+- name: Install the rsyslog transport module
+  ansible.builtin.package:
+    name: "{{ 'rsyslog-gnutls' if hyperi_audit_transport == 'syslog-tls' else 'rsyslog-relp' }}"
+    state: latest # noqa: package-latest
+  register: hyperi_audit_transport_install
+  retries: 6
+  delay: 10
+  until: hyperi_audit_transport_install is success
+  when: hyperi_audit_transport != 'tcp'
+  notify: hyperi_audit restart
+
+- name: Install the SELinux policy tools
+  when: hyperi_audit_selinux_enabled | bool
+  block:
+    - name: Install policycoreutils
+      ansible.builtin.package:
+        name: policycoreutils
+        state: present
+
+    # Package names differ across EL releases. Each is installed if the release has it.
+    - name: Install the SELinux policy build tools this release ships
+      ansible.builtin.package:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - policycoreutils-devel
+        - policycoreutils-python-utils
+        - policycoreutils-python
+        - libselinux-python
+      failed_when: false

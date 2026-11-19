@@ -1,0 +1,57 @@
+---
+- name: Read the init system
+  ansible.builtin.command:
+    argv: [ps, -p, "1", -o, comm=]
+  register: hyperi_audit_init
+  changed_when: false
+
+- name: Enable rsyslog and auditd at boot
+  ansible.builtin.service:
+    name: "{{ item }}"
+    enabled: true
+  loop: [rsyslog, auditd]
+
+- name: Start rsyslog and auditd
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: started
+  loop: [rsyslog, auditd]
+
+# restart.yml writes these fingerprints to the stamp only after the restart and
+# rule load succeed, so a run that failed part-way is retried by the next one.
+- name: Fingerprint each service's config
+  ansible.builtin.command:
+    argv: "{{ ['find'] + item.value + ['-type', 'f', '-exec', 'sha256sum', '{}', '+'] }}"
+  loop: "{{ hyperi_audit_service_config | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: hyperi_audit_config_sums
+  changed_when: false
+  failed_when: false
+
+- name: Read the fingerprints last applied
+  ansible.builtin.slurp:
+    src: "{{ hyperi_audit_stamp }}"
+  register: hyperi_audit_stamp_read
+  failed_when: false
+
+- name: Decide which services to restart
+  ansible.builtin.set_fact:
+    hyperi_audit_fingerprints: "{{ hyperi_audit_now }}"
+    hyperi_audit_restart_auditd: >-
+      {{ hyperi_audit_restart_needed | default(false) | bool
+         or hyperi_audit_now.auditd != hyperi_audit_applied.auditd | default('') }}
+    hyperi_audit_restart_rsyslog: >-
+      {{ hyperi_audit_restart_needed | default(false) | bool
+         or hyperi_audit_now.rsyslog != hyperi_audit_applied.rsyslog | default('') }}
+  vars:
+    hyperi_audit_now: >-
+      {{ dict(hyperi_audit_config_sums.results | map(attribute='item.key')
+              | zip(hyperi_audit_config_sums.results | map(attribute='stdout_lines')
+                    | map('sort') | map('join', '\n') | map('hash', 'sha256'))) }}
+    # e30= is base64 for {}: no stamp yet.
+    hyperi_audit_applied: "{{ hyperi_audit_stamp_read.content | default('e30=') | b64decode | from_json }}"
+
+- name: Restart the services whose config changed
+  ansible.builtin.include_tasks: restart.yml
+  when: hyperi_audit_restart_auditd | bool or hyperi_audit_restart_rsyslog | bool

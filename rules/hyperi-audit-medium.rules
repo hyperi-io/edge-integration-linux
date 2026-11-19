@@ -1,0 +1,508 @@
+# Generated from roles/hyperi_audit/templates/hyperi-audit.rules.j2 by test/render_reference.yml. Do not edit.
+# HyperI auditd ruleset. Level medium, overlays: none.
+# Source: edge-integration-linux, roles/hyperi_audit/templates/hyperi-audit.rules.j2
+# License: Apache-2.0. Copyright (c) 2026 HYPERI PTY LIMITED.
+#
+# LINEAGE. Forked from Neo23x0 (Florian Roth) "Best Practice Auditd
+# Configuration" (Apache-2.0), then progressively merged with the public
+# baselines below. Method, and it matters when reading the changelog: each merge
+# took the DELTA the newer source had that we did not, and replaced our line
+# where the newer source did it better. Roughly every second merge was followed
+# by a performance review, because breadth accrues and CPU does not.
+#   Neo23x0 (Florian Roth) -> ACSC (ASD) OpenSCAP -> NIST -> DISA STIG
+#   -> alphagov/GDS -> US DoD -> SigmaHQ
+# Detection keys carry MITRE ATT&CK technique IDs where mapped. Keys are part
+# of the output contract: rename one and every search on it goes blind.
+#
+# SIGMA ALIGNMENT. Where the events feed SigmaHQ rules, a Sigma auditd rule
+# whose event we never emit is a dead detection - it loads, looks like
+# coverage, and never matches. Rules marked "sigma:" below also make a Sigma
+# rule FIREABLE, and each earns its place on its own key without Sigma.
+# Detection logic taken from SigmaHQ (https://github.com/SigmaHQ/sigma),
+# Detection Rule License 1.1 (https://github.com/SigmaHQ/Detection-Rule-License).
+#
+# DO-NOT-MERGE from upstream linux-audit: 10-base-config.rules still ships
+# --backlog_wait_time 60000, the exact host-CPU bug v3.0 fixed, and
+# 20-dont-audit.rules ships its noise suppressors commented out. Treating that
+# file as "the newer source" would reintroduce the throttle.
+#
+# USE. Copy to /etc/audit/rules.d/hyperi-audit.rules and run `augenrules --load`.
+# The final -e 2 locks the rules until reboot. low, medium and high each hold
+# the level below. internet is medium for an internet-facing web server.
+# Levels, measured cost, rule order and history:
+# https://github.com/hyperi-io/edge-integration-linux/blob/main/docs/rulesets.md
+#
+# Assumes a 64-bit host (see the 32-bit ABI tripwire). Events are forwarded
+# off-box via rsyslog imfile reading /var/log/audit/audit.log, NOT audisp.
+#
+# Changelog (newest first). Entries below v3.0 were rebuilt from the merge order
+# when the pre-git tracking was retired. (low), (high) and (internet) lines are
+# from the per-profile files before v4.0.
+# v4.0  2026-11-19  One layered template replaces the four profile files.
+#                   INTERNET became the edge overlay. Directory watches use
+#                   -F dir= -F perm= (a quarter of the -w dir/ cost). -S lists
+#                   fitted to each host's syscall table, so arm64 loads. Fixed
+#                   msgtype excludes that never loaded, the setuid-exec rule,
+#                   execveat bypass, docker.sock, shadow writes, setid_fail.
+# v3.3  2026-07-20  Baseline refresh from ACSC/NIST/DISA STIG: AppArmor MAC
+#                   tamper (Ubuntu was a whole-distro blind spot), nsswitch,
+#                   gpasswd/chage, fchmodat2 (own line - modern-kernel chmod),
+#                   open_by_handle_at (own line - Shocker container escape). The
+#                   hyperi_audit_use_case role variable was renamed
+#                   hyperi_audit_profile_override (it replaces the level).
+#       (high)      Also legacy pam.conf.
+# v3.2  2026-07-17  Sigma alignment + baseline refresh. Our events feed a
+#                   pipeline that auto-ingests SigmaHQ rules; dual-key the rules
+#                   Sigma matches by key so its upstream key names sit alongside
+#                   ours. Added dmesg clear/off, ASLR-disable, rsyslog-config,
+#                   setenforce, systemd-run, and the Neo23x0 2026-05 socket
+#                   delta (AF_ALG, raw socket, socket BPF). Fixed: user crontabs
+#                   were watched on the Debian path only.
+#       (high)      Fixed: T1548.001_priv_ctx_exec fired on EVERY daemon
+#                   execve (auid=unset is not != uid).
+# v3.1  2026-07-17  Escalated-execution rules moved ABOVE the excludes: the
+#                   excludes match auid>=1000 + path with no euid scoping, so
+#                   below them `sudo cat /tmp/x` went unlogged. See that block
+#                   for why euid scoping the excludes is the wrong fix
+#                   (auid=unset >= 1000).
+# v3.0  2026-07-16  Host-CPU fix + modernisation.
+#                   - KERNEL CPU FIX: --backlog_wait_time 0 (was 60000). A
+#                     non-zero wait makes the kernel BLOCK/throttle syscalls
+#                     when the backlog fills -> host live-lock / CPU stall.
+#                     0 drops on overflow instead (Auditbeat default; Grubb
+#                     recommendation). Kernel >=3.14; el6 skips it via -i.
+#                   - "-i" moved FIRST so directives/syscalls a given kernel
+#                     does not know (backlog_wait_time, loginuid-immutable,
+#                     filesystem filter, execveat, memfd_create, bpf, setns,
+#                     io_uring, finit_module ...) are skipped, not aborted, on
+#                     el6 (audit 2.4.x / kernel 2.6.32) .. current (audit 3.x).
+#                   - NEW TTPs: eBPF (bpf), namespace/container escape
+#                     (setns/unshare + container runtimes), io_uring,
+#                     setuid/setgid root exec, fileless (memfd_create).
+#                   - FIX: removed the dangling "-F" syntax error on the
+#                     shred/wipe/scrub/dd rules (converted to path watches).
+#                   - EFFICIENCY: dropped the per-binary execute-watch sprawl
+#                     (macOS/VBox/Parallels, full compressor list, generic
+#                     config-mgmt) that duplicated telemetry and bloated the
+#                     kernel filter; kept broad, attributable sensors instead.
+#       (low)       Trimmed to the low-volume high-signal subset.
+#       (internet)  Per-connection connect4/connect6/socket block dropped for
+#                   this edge use-case.
+# v2.9   2025-01-02  MITRE TIDs; non-root high-frequency execve excludes.
+#                    Customer-site perf review.
+# v2.7   2024-11-07  Tiered auditd (low/medium/high) migrated from PaaS.
+#       (internet)   Connection logging off.
+# v2.6   2023-11-08  MITRE merge; virtualisation.
+# v2.5   2023-06-14  US DoD merge.
+# v2.4   2023-03-21  alphagov/GDS (UK Government Digital Service) merge, via
+#                    Neo23x0. Recorded as "GCHQ" until 2026-07-17.
+# v2.3   2022-11-01  Updates, merges and fixes.
+# v2.2.1 2022-03-08  Customer-site perf review + merge.
+# v2.2   2022-01-10  HyperI infra merge.
+# v1.7   2021-09-03  DISA STIG merge.
+# v1.6   2021-06-23  NIST merge.
+# v1.5   2021-06-01  ACSC OpenSCAP merge.
+# v1.4   2021-01-11  Initial fork from Neo23x0.
+
+## --- Control ---------------------------------------------------------------
+-D
+## Ignore-errors FIRST: a line this kernel or auditctl does not know is
+## skipped, not fatal. It reacts to the real kernel, so do NOT replace it with
+## an auditd-version gate.
+-i
+## Kernel backlog buffer. With wait_time 0 a full backlog drops events, so high
+## gets more headroom.
+-b 8192
+## HOST-CPU FIX: 0 drops on overflow instead of blocking the syscall until the
+## backlog drains. Kernel >=3.14; el6 skips it via -i.
+--backlog_wait_time 0
+## Anti-tamper on auid. Kernel >=3.4; el6 skips.
+--loginuid-immutable
+## Failure mode: 1 = printk (0 silent, 2 panic).
+-f 1
+
+## --- Execution from writable or unusual locations ---------------------------
+## MUST stay ABOVE the excludes: first match wins, and the excludes match
+## auid+path with no euid scoping, so below them `sudo cat /tmp/x` goes
+## unlogged. Do not euid-scope the excludes instead: auid=unset is >=1000.
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -F dir=/tmp           -k T1059_root_tmp
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -F dir=/var/tmp       -k T1059_root_vartmp
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -F dir=/dev/shm       -k T1059_root_devshm
+-a always,exit -F arch=b64 -S execve -S execveat -F dir=/dev/shm                 -k T1059_devshm_exec
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -C uid!=euid          -k T1059_setuid_exec
+## A setuid or setgid bit set (mode & 06000), here so the /dev/shm exclude cannot hide it.
+-a always,exit -F arch=b64 -S fchmod -F a1&0xC00 -k T1548.001_setuid_set
+-a always,exit -F arch=b64 -S chmod -F a1&0xC00 -k T1548.001_setuid_set
+-a always,exit -F arch=b64 -S fchmodat -F a2&0xC00 -k T1548.001_setuid_set
+-a always,exit -F arch=b64 -S fchmodat2 -F a2&0xC00 -k T1548.001_setuid_set
+## A connect to the Docker socket: root on the host. Above the web server excludes.
+-a always,exit -F arch=b64 -S connect -F path=/run/docker.sock -k T1610_docker_sock
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -F dir=/home          -k T1059_root_home
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -F dir=/usr/local/bin -k T1059_root_localbin
+-a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -F dir=/opt           -k T1059_root_opt
+-a always,exit -F arch=b64 -S execve -F egid=0 -C gid!=egid          -k T1059_setgid_exec
+
+## --- Noise excludes ---------------------------------------------------------
+## As early as possible, but BELOW the execution rules. One msgtype per line,
+## and no key on the exclude list: auditctl rejects the line.
+-a always,exclude -F msgtype=EOE
+-a always,exclude -F msgtype=CRYPTO_KEY_USER
+## AVC denials stay logged (they flag exploit attempts). For a noisy SELinux host:
+# -a always,exclude -F msgtype=AVC
+## Daemon self-noise
+-a never,user -F subj_type=crond_t -k T1053_cron_ignore
+## Shared memory and LVM lock churn, for the file-change syscalls only, so
+## execution from /dev/shm stays visible.
+-a never,exit -F arch=b64 -S unlinkat -S renameat -S renameat2 -S fchmodat -S fchownat -F dir=/dev/shm -k T1135_sharedmem_ignore
+-a never,exit -F arch=b64 -S rmdir -F dir=/dev/shm -k T1135_sharedmem_ignore
+-a never,exit -F arch=b64 -S unlink -F dir=/dev/shm -k T1135_sharedmem_ignore
+-a never,exit -F arch=b64 -S rename -F dir=/dev/shm -k T1135_sharedmem_ignore
+-a never,exit -F arch=b64 -S chmod -F dir=/dev/shm -k T1135_sharedmem_ignore
+-a never,exit -F arch=b64 -S chown -F dir=/dev/shm -k T1135_sharedmem_ignore
+-a never,exit -F arch=b64 -S lchown -F dir=/dev/shm -k T1135_sharedmem_ignore
+-a never,exit -F arch=b64 -S fchmodat2 -F dir=/dev/shm -k T1135_sharedmem_ignore
+-a never,exit -F arch=b64 -S unlinkat -S renameat -S renameat2 -F dir=/var/lock/lvm -k exclude_locklvm
+-a never,exit -F arch=b64 -S rmdir -F dir=/var/lock/lvm -k exclude_locklvm
+-a never,exit -F arch=b64 -S unlink -F dir=/var/lock/lvm -k exclude_locklvm
+-a never,exit -F arch=b64 -S rename -F dir=/var/lock/lvm -k exclude_locklvm
+## Kernel tracing pseudo-filesystems (filesystem filter: newer kernels; el6/el7 skip)
+-a never,filesystem -F fstype=tracefs -k exclude_tracefs
+-a never,filesystem -F fstype=debugfs -k exclude_debugfs
+## Time daemons call adjtimex every few seconds.
+-a never,exit -F arch=b64 -S adjtimex -F exe=/usr/sbin/chronyd -k T1070.006_timesync_ignore
+-a never,exit -F arch=b64 -S adjtimex -F exe=/usr/sbin/ntpd -k T1070.006_timesync_ignore
+-a never,exit -F arch=b64 -S adjtimex -F exe=/usr/lib/systemd/systemd-timesyncd -k T1070.006_timesync_ignore
+-a never,exit -F arch=b64 -S adjtimex -F exe=/usr/bin/vmtoolsd -k T1070.006_timesync_ignore
+
+## --- Audit system self-protection ------------------------------------------
+-a always,exit -F arch=b64 -F perm=wra -F dir=/var/log/audit -k T1005_auditlog
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/audit -k T1685.004_auditconfig -k auditconfig
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/audisp -k T1685.004_audispconfig -k audispconfig
+-w /sbin/auditctl  -p x   -k T1685.004_audittools -k audittools
+-w /sbin/auditd    -p x   -k T1685.004_audittools -k audittools
+-w /usr/sbin/auditd -p x  -k T1685.004_audittools -k audittools
+-w /usr/sbin/augenrules -p x -k T1685.004_audittools -k audittools
+-w /etc/libaudit.conf -p wa -k T1685.004_auditconfig -k auditconfig
+-a always,exit -F path=/usr/sbin/ausearch    -F perm=x -k T1005_auditlog
+-a always,exit -F path=/usr/sbin/aureport    -F perm=x -k T1005_auditlog
+-a always,exit -F path=/usr/sbin/aulast      -F perm=x -k T1005_auditlog
+-a always,exit -F path=/usr/sbin/aulastlogin -F perm=x -k T1005_auditlog
+-a always,exit -F path=/usr/sbin/auvirt      -F perm=x -k T1005_auditlog
+
+## --- 32-bit ABI tripwire ----------------------------------------------------
+## Every other rule is b64. These catch a 32-bit process doing what those
+## rules watch, without logging every syscall a legitimate 32-bit app makes.
+## execve, open and connect fire on every call a 32-bit app makes.
+-a always,exit -F arch=b32 -S execve -S openat -S connect -F key=32bit-abi
+-a always,exit -F arch=b32 -S open -F key=32bit-abi
+-a always,exit -F arch=b32 -S socketcall -F key=32bit-abi
+-a always,exit -F arch=b32 -S ptrace -S init_module -S finit_module -S personality -F key=32bit-abi
+-a always,exit -F arch=b32 -S setuid32 -F key=32bit-abi
+
+## --- Kernel-level techniques (rare syscalls, cheap) -------------------------
+-a always,exit -F arch=b64 -S bpf -k T1055_ebpf
+-a always,exit -F arch=b64 -S memfd_create -k T1620_memfd
+-a always,exit -F arch=b64 -S kexec_load -k T1014_kexec
+-a always,exit -F arch=b64 -S kexec_file_load -k T1014_kexec
+## Shocker container escape: it opens a file by handle, so no path rule sees it.
+## Not auid-scoped: it runs from a container, auid unset.
+-a always,exit -F arch=b64 -S open_by_handle_at -k T1611_shocker
+-a always,exit -F arch=b64 -S process_vm_writev -k T1055_process_vm
+-a always,exit -F arch=b64 -S process_vm_readv -k T1003.007_process_vm
+-a always,exit -F arch=b64 -S setns -S unshare -S pivot_root -k T1611_namespace
+-a always,exit -F arch=b64 -S io_uring_setup -k T1685_io_uring -k T1562_io_uring
+
+## --- Kernel modules, sysctl ------------------------------------------------
+-a always,exit -F perm=x -F auid!=unset -F path=/sbin/insmod   -k T1547.006_mod
+-a always,exit -F perm=x -F auid!=unset -F path=/sbin/modprobe -k T1547.006_mod
+-a always,exit -F perm=x -F auid!=unset -F path=/sbin/rmmod    -k T1547.006_mod
+-a always,exit -F arch=b64 -S finit_module -S init_module -S delete_module -k T1547.006_mod
+-w /etc/modprobe.conf -p wa -k T1547.006_mod
+-w /etc/modules -p wa -k T1547.006_mod
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/modprobe.d -k T1547.006_mod
+## PAM modules: a dropped or patched module is a credential backdoor (Plague, 2025).
+-a always,exit -F arch=b64 -F perm=wa -F dir=/usr/lib64/security -k T1556.003_pam_module
+-a always,exit -F arch=b64 -F perm=wa -F dir=/usr/lib/security -k T1556.003_pam_module
+-a always,exit -F arch=b64 -F perm=wa -F dir=/usr/lib/x86_64-linux-gnu/security -k T1556.003_pam_module
+-a always,exit -F arch=b64 -F perm=wa -F dir=/usr/lib/aarch64-linux-gnu/security -k T1556.003_pam_module
+-w /etc/sysctl.conf -p wa -k T1547_sysctl
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/sysctl.d -k T1547_sysctl
+-w /usr/sbin/sysctl -p x -k T1685_sysctl
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/modules-load.d -k T1547.006_mod
+
+## --- Time ------------------------------------------------------------------
+-a always,exit -F arch=b64 -S settimeofday -S clock_settime -k T1070.006_time
+-w /etc/localtime -p wa -k T1070.006_time
+-a always,exit -F arch=b64 -S adjtimex -k T1070.006_time
+## Timestomping from a session. Daemons (auid unset) touch files constantly.
+-a always,exit -F arch=b64 -S utimensat -F auid!=unset -k T1070.006_time
+-a always,exit -F arch=b64 -S utimes -F auid!=unset -k T1070.006_time
+
+## --- Scheduled tasks, init and systemd persistence --------------------------
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/cron.d -k T1053.003_cron
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/cron.daily -k T1053.003_cron
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/cron.hourly -k T1053.003_cron
+-w /etc/crontab       -p wa -k T1053.003_cron
+## User crontabs: Debian keeps them in /var/spool/cron/crontabs/, EL in
+## /var/spool/cron/. One rule on /var/spool/cron covers both.
+-a always,exit -F arch=b64 -F perm=wa -F dir=/var/spool/cron -k T1053.003_cron
+-w /etc/inittab -p wa -k T1037_init
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/init.d -k T1037_init
+-w /etc/rc.local -p wa -k T1037.004_rclocal
+-w /bin/systemctl -p x -k T1543.002_systemd
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/systemd -k T1543.002_systemd
+-a always,exit -F arch=b64 -F perm=wa -F dir=/usr/lib/systemd -k T1543.002_systemd
+-a always,exit -F arch=b64 -F perm=wa -F dir=/usr/local/lib/systemd -k T1543.002_systemd
+-a always,exit -F arch=b64 -F perm=wa -F dir=/run/systemd/system -k T1543.002_systemd
+## Kernel, initramfs and bootloader. Only package updates write here.
+-a always,exit -F arch=b64 -F perm=wa -F dir=/boot -k T1542.003_boot
+-w /etc/cron.allow -p wa -k T1053.003_cron
+-w /etc/cron.deny  -p wa -k T1053.003_cron
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/cron.monthly -k T1053.003_cron
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/cron.weekly -k T1053.003_cron
+-w /etc/anacrontab -p wa -k T1053.003_cron
+-a always,exit -F arch=b64 -F path=/usr/bin/crontab -F perm=x -F auid!=unset -F auid>=1000 -k T1053.003_cron
+-a always,exit -F arch=b64 -F path=/usr/bin/at      -F perm=x -F auid!=unset -F auid>=1000 -k T1053.002_at
+-w /etc/at.allow -p wa -k T1053.002_at
+-w /etc/at.deny  -p wa -k T1053.002_at
+-a always,exit -F arch=b64 -F perm=wa -F dir=/var/spool/at -k T1053.002_at
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/init -k T1037_init
+-w /sbin/init   -p wa -k T1037_init
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/update-motd.d -k T1037_motd
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/udev/rules.d -k T1546.017_udev
+-a always,exit -F arch=b64 -F perm=wa -F dir=/usr/lib/udev/rules.d -k T1546.017_udev
+-a always,exit -F arch=b64 -F perm=wa -F dir=/run/udev/rules.d -k T1546.017_udev
+
+## --- Accounts, sudo, credentials -------------------------------------------
+-w /etc/sudoers   -p wa -k T1078.003_sudoers
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/sudoers.d -k T1078.003_sudoers
+-w /usr/bin/passwd -p x -k T1078.003_passwd
+-w /usr/sbin/useradd  -p x -k T1136_account
+-w /usr/sbin/userdel  -p x -k T1136_account
+-w /usr/sbin/usermod  -p x -k T1136_account
+-w /etc/group   -p wa -k T1087.001_localgroup -k T1098_account
+-w /etc/passwd  -p wa -k T1087.001_localuser -k T1098_account
+-w /etc/gshadow -k T1087.001_shadow
+## Authentication reads shadow on every login, sudo and cron job. Those readers
+## are dropped first, which leaves any other process reading it.
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/sbin/sshd -k T1087.001_shadow_ignore
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/sbin/cron -k T1087.001_shadow_ignore
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/sbin/crond -k T1087.001_shadow_ignore
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/sbin/unix_chkpwd -k T1087.001_shadow_ignore
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/bin/sudo -k T1087.001_shadow_ignore
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/bin/su -k T1087.001_shadow_ignore
+-a never,exit -F path=/etc/shadow -F perm=r -F exe=/usr/bin/login -k T1087.001_shadow_ignore
+-w /etc/shadow  -p r -k T1087.001_shadow
+-w /etc/shadow  -p wa -k T1098_shadow_write
+## nsswitch.conf picks the passwd/shadow backend: repointing it bypasses auth.
+-w /etc/nsswitch.conf -p wa -k T1556_nsswitch
+-w /etc/environment -p wa -k T1546_environment
+-w /bin/su -p x -k T1548.003_su
+-w /usr/bin/sudo -p x -k T1548.003_sudo
+-w /usr/bin/pkexec -p x -k T1068_CVE_2021_4034
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/pam.d -k T1556_pam
+## Legacy single-file PAM config, still used by older and minimal systems.
+-w /etc/pam.conf -p wa -k T1556_pam
+-w /usr/sbin/setcap -p x -k T1548_setcap
+## polkit rules grant root actions without sudo.
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/polkit-1 -k T1548_polkit
+## Domain authentication: repointing Kerberos or SSSD bypasses the directory.
+-w /etc/krb5.conf -p wa -k T1556_authconfig
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/krb5.conf.d -k T1556_authconfig
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/sssd -k T1556_authconfig
+-w /usr/sbin/groupadd -p x -k T1136_account
+-w /usr/sbin/groupmod -p x -k T1136_account
+-w /usr/sbin/addgroup -p x -k T1136_account
+-w /usr/sbin/adduser  -p x -k T1136_account
+## gpasswd and chage: account changes the useradd and group* watches miss.
+-a always,exit -F arch=b64 -F path=/usr/bin/gpasswd -F perm=x -F auid!=unset -F auid>=1000 -k T1136_account
+-a always,exit -F arch=b64 -F path=/usr/bin/chage   -F perm=x -F auid!=unset -F auid>=1000 -k T1098_account
+-w /etc/security/opasswd -k T1087.001_opasswd
+-w /usr/bin/ldapsearch -p x -k T1087.002_ldap
+-a always,exit -F arch=b64 -S setresuid -F a0=0 -F exe=/usr/bin/sudo -k T1548.003_sudo
+## Root touching another user's home from a logged-in session.
+-a always,exit -F arch=b64 -F perm=rwa -F uid=0 -F auid!=unset -F auid>=1000 -F dir=/home -C auid!=obj_uid -k T1548.003_power_abuse
+-w /usr/bin/dbus-send -p x -k T1068_CVE_2021_3560
+-w /usr/bin/gdbus -p x -k T1068_CVE_2021_3560
+
+## --- Permission changes from a session -------------------------------------
+-a always,exit -F arch=b64 -S fchmod -S fchmodat -S fchown -S fchownat -S setxattr -S lsetxattr -S fsetxattr -S removexattr -S lremovexattr -S fremovexattr -F auid!=unset -F auid>=1000 -k T1222_perm_mod
+-a always,exit -F arch=b64 -S chmod -F auid!=unset -F auid>=1000 -k T1222_perm_mod
+-a always,exit -F arch=b64 -S fchmodat2 -F auid!=unset -F auid>=1000 -k T1222_perm_mod
+-a always,exit -F arch=b64 -S chown -F auid!=unset -F auid>=1000 -k T1222_perm_mod
+-a always,exit -F arch=b64 -S lchown -F auid!=unset -F auid>=1000 -k T1222_perm_mod
+
+## --- Code injection and shell persistence ----------------------------------
+-a always,exit -F arch=b64 -S ptrace -k T1055.008_ptrace
+-w /etc/ld.so.preload -p wa -k T1574.006_ldpreload
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/profile.d -k T1546.004_shellprofile
+-w /etc/profile    -p wa -k T1546.004_shellprofile
+-w /root/.bashrc       -p wa -k T1546.004_rootbash
+-w /etc/ssh/sshd_config   -p wa -k T1098.004_sshd
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/ssh/sshd_config.d -k T1098.004_sshd
+-a always,exit -F arch=b64 -F perm=wa -F dir=/root/.ssh -k T1098.004_root_ssh
+-w /etc/ld.so.conf   -p wa -k T1574.006_ldpath
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/ld.so.conf.d -k T1574.006_ldpath
+-w /etc/shells     -p wa -k T1546.004_shellprofile
+-w /etc/bashrc     -p wa -k T1546.004_shellprofile
+-w /etc/bash.bashrc -p wa -k T1546.004_shellprofile
+-w /etc/csh.cshrc  -p wa -k T1546.004_shellprofile
+-w /etc/csh.login  -p wa -k T1546.004_shellprofile
+-w /root/.bash_profile -p wa -k T1546.004_rootbash
+-w /root/.profile      -p wa -k T1546.004_rootbash
+## Each login account's authorized_keys, added by the role per host. Every
+## watch costs each syscall about 2 ns, so high alone adds shell start-up files.
+
+## --- Rare, high-signal socket use ------------------------------------------
+## Rare, so in low and kept by edge. AF_ALG (a0=38) is the kernel crypto API:
+## ransomware encrypting there leaves no library trace. Not auid-scoped, as
+## ransomware usually runs from a compromised service.
+-a always,exit -F arch=b64 -S socket -F a0=38 -F success=1 -k T1486_af_alg
+-a always,exit -F arch=b64 -S bind -F a2=88 -F success=1 -k T1486_af_alg
+-a always,exit -F arch=b64 -S setsockopt -F a1=279 -F success=1 -k T1486_af_alg
+## Raw sockets (AF_PACKET=17, SOCK_RAW=3) - sniffers and covert channels.
+-a always,exit -F arch=b64 -S socket -F a0=17 -F a1=3 -k T1040_raw_socket
+## SO_ATTACH_FILTER (a1=SOL_SOCKET=1, a2=26): a BPF filter on a socket, packet capture.
+-a always,exit -F arch=b64 -S setsockopt -F a1=1 -F a2=26 -k T1040_socket_bpf
+
+## --- Mounts, devices, host identity, network config ------------------------
+-a always,exit -F arch=b64 -S mknodat -k T1546_specialfiles
+-a always,exit -F arch=b64 -S mknod -k T1546_specialfiles
+-a always,exit -F arch=b64 -S mount -S umount2 -F auid!=unset -k T1078_mount
+-a always,exit -F arch=b64 -S fsopen -F auid!=unset -k T1078_mount
+-a always,exit -F arch=b64 -S fsconfig -F auid!=unset -k T1078_mount
+-a always,exit -F arch=b64 -S fsmount -F auid!=unset -k T1078_mount
+-a always,exit -F arch=b64 -S move_mount -F auid!=unset -k T1078_mount
+-a always,exit -F arch=b64 -S open_tree -F auid!=unset -k T1078_mount
+-a always,exit -F arch=b64 -S fspick -F auid!=unset -k T1078_mount
+-a always,exit -F arch=b64 -S mount_setattr -F auid!=unset -k T1078_mount
+-a always,exit -F arch=b64 -S sethostname -S setdomainname -k T1082_hostname
+-w /etc/hosts -p wa -k T1565_hosts
+## chroot from a session: sudo --chroot (CVE-2025-32463) and jail escapes.
+-a always,exit -F arch=b64 -S chroot -F auid!=unset -F auid>=1000 -k T1068_chroot
+-w /etc/nftables.conf -p wa -k T1686_firewall
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/iptables -k T1686_firewall
+-w /usr/bin/firewall-cmd -p x -k T1686_firewall
+-w /usr/sbin/ufw -p x -k T1686_firewall
+-a always,exit -F arch=b64 -S swapon -S swapoff -F auid!=unset -k T1078_swap
+-w /etc/sysconfig/network -p wa -k T1565_network
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/sysconfig/network-scripts -k T1565_network
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/network -k T1565_network
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/NetworkManager -k T1565_networkmanager
+-w /etc/issue     -p wa -k T1082_issue
+-w /etc/issue.net -p wa -k T1082_issue
+-w /etc/hostname  -p wa -k T1082_hostname
+
+## --- Defence evasion and anti-forensics ------------------------------------
+## Documented bypasses of the Neo23x0 config (CheraghiMilad/bypass-Neo23x0-auditd-config).
+## syslog(2) 4 and 5 clear the kernel ring buffer, 6 mutes it.
+## sigma: lnx_auditd_clean_disable_dmesg_via_syslog.yml
+-a always,exit -F arch=b64 -S syslog -F a0=4 -k T1685.006_dmesg_clear -k T1070.002_dmesg_clear
+-a always,exit -F arch=b64 -S syslog -F a0=5 -k T1685.006_dmesg_clear -k T1070.002_dmesg_clear
+-a always,exit -F arch=b64 -S syslog -F a0=6 -k T1685_dmesg_off -k T1562.006_dmesg_off
+## personality(ADDR_NO_RANDOMIZE) - disabling ASLR to make an exploit reliable.
+## sigma: lnx_auditd_disable_aslr_protection.yml
+-a always,exit -F arch=b64 -S personality -F a0=0x40000 -k T1055.009_aslr_off
+## Our own transport's config - we forward via rsyslog, so tampering here
+## blinds the pipeline. sigma: lnx_auditd_logging_config_change.yml
+-w /etc/rsyslog.conf -p wa -k T1685_logging -k T1562.006_logging
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/rsyslog.d -k T1685_logging -k T1562.006_logging
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/syslog-ng -k T1685_logging
+-w /etc/syslog.conf -p wa -k T1685_logging
+## setenforce 0 writes /sys/fs/selinux/enforce, which no /etc watch sees.
+-a always,exit -F arch=b64 -F path=/usr/sbin/setenforce -F perm=x -k T1685_selinux -k T1562.001_selinux
+## Relabelling and policy booleans from a session (STIG).
+-a always,exit -F arch=b64 -F path=/usr/bin/chcon -F perm=x -F auid!=unset -F auid>=1000 -k T1685_selinux
+-a always,exit -F arch=b64 -F path=/usr/sbin/setfiles -F perm=x -F auid!=unset -F auid>=1000 -k T1685_selinux
+-a always,exit -F arch=b64 -F path=/usr/sbin/semanage -F perm=x -F auid!=unset -F auid>=1000 -k T1685_selinux
+-a always,exit -F arch=b64 -F path=/usr/sbin/setsebool -F perm=x -F auid!=unset -F auid>=1000 -k T1685_selinux
+## systemd-run reparents a payload to PID 1, away from the caller's auid.
+-a always,exit -F arch=b64 -F path=/usr/bin/systemd-run -F perm=x -F auid!=unset -k T1548_systemd_run
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/selinux -k T1685_selinux -k T1562.001_selinux
+## AppArmor is the Ubuntu/Debian MAC, which the SELinux watches miss.
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/apparmor -k T1685_apparmor -k T1562.001_apparmor
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/apparmor.d -k T1685_apparmor -k T1562.001_apparmor
+-a always,exit -F arch=b64 -F path=/sbin/apparmor_parser -F perm=x -k T1685_apparmor -k T1562.001_apparmor
+-w /usr/bin/shred -p x -k T1070.004_shred
+-w /usr/bin/wipe  -p x -k T1070.004_wipe
+-a always,exit -F arch=b64 -S unlinkat -S renameat -S renameat2 -F auid=0 -k T1070.004_filedel_root
+-a always,exit -F arch=b64 -S rmdir -F auid=0 -k T1070.004_filedel_root
+-a always,exit -F arch=b64 -S unlink -F auid=0 -k T1070.004_filedel_root
+-a always,exit -F arch=b64 -S rename -F auid=0 -k T1070.004_filedel_root
+-w /usr/bin/scrub -p x -k T1070.004_scrub
+-w /usr/bin/dd    -p x -k T1070.004_dd
+-a always,exit -F arch=b64 -S unlinkat -S renameat -S renameat2 -F auid!=unset -F auid>=1000 -k T1070.004_filedel
+-a always,exit -F arch=b64 -S rmdir -F auid!=unset -F auid>=1000 -k T1070.004_filedel
+-a always,exit -F arch=b64 -S unlink -F auid!=unset -F auid>=1000 -k T1070.004_filedel
+-a always,exit -F arch=b64 -S rename -F auid!=unset -F auid>=1000 -k T1070.004_filedel
+
+## --- Network connections ---------------------------------------------------
+## Every outbound connect: the largest event source on a busy host. The edge
+## overlay drops it, as the edge firewall records it.
+## Dual-keyed: SigmaHQ's network_service_scanning matches network_connect_4
+## literally. One rule, one record. Keep both keys.
+-a always,exit -F arch=b64 -S connect -F a2=16 -F success=1 -k T1071_connect4 -k network_connect_4
+-a always,exit -F arch=b64 -S connect -F a2=28 -F success=1 -k T1071_connect6
+
+## --- Tools: download, remote access, decode --------------------------------
+## Dual-keyed: SigmaHQ's susp_c2_commands matches susp_activity literally.
+## One rule, one record. Keep both keys.
+-w /usr/bin/wget  -p x -k T1105_wget -k susp_activity
+-w /usr/bin/curl  -p x -k T1105_curl -k susp_activity
+-w /usr/bin/ssh   -p x -k T1021.004_ssh -k susp_activity
+-w /usr/bin/socat -p x -k T1105_socat -k susp_activity
+-w /bin/nc        -p x -k T1105_nc -k susp_activity
+-w /usr/bin/ncat  -p x -k T1105_ncat -k susp_activity
+-w /usr/sbin/stunnel -p x -k T1573.002_stunnel
+-w /usr/bin/stunnel  -p x -k T1573.002_stunnel
+-w /usr/bin/ftp   -p x -k T1105_ftp -k susp_activity
+-w /usr/bin/scp   -p x -k T1105_scp -k susp_activity
+-w /usr/bin/sftp  -p x -k T1105_sftp -k susp_activity
+-w /bin/nc.openbsd     -p x -k T1105_nc -k susp_activity
+-w /bin/nc.traditional -p x -k T1105_nc -k susp_activity
+-w /usr/bin/rdesktop  -p x -k T1219_rat -k susp_activity
+-w /usr/bin/xfreerdp  -p x -k T1219_rat -k susp_activity
+-w /usr/bin/teamviewer -p x -k T1219_rat
+-w /usr/bin/certutil -p x -k T1140_certutil
+-w /usr/bin/unzip   -p x -k T1140_unzip
+-w /usr/bin/base64  -p x -k T1140_base64 -k susp_activity
+-w /usr/bin/openssl -p x -k T1140_openssl
+-w /etc/aliases  -p wa -k T1114_mail
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/postfix -k T1114_mail
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/exim4 -k T1114_mail
+
+## --- Power state -----------------------------------------------------------
+-w /sbin/shutdown -p x -k T1529_power
+-w /sbin/reboot   -p x -k T1529_power
+## reboot(2) itself, whichever binary or symlink made the call.
+-a always,exit -F arch=b64 -S reboot -k T1529_power
+-w /sbin/poweroff -p x -k T1529_power
+-w /sbin/halt     -p x -k T1529_power
+
+## --- Containers -------------------------------------------------------------
+-w /usr/bin/docker  -p x -k T1610_docker
+-w /var/run/docker.sock -p rwa -k T1610_docker_sock
+-w /usr/bin/dockerd -p x -k T1610_docker
+-a always,exit -F arch=b64 -F perm=wa -F dir=/etc/docker -k T1610_docker_config
+-w /usr/bin/podman     -p x -k T1610_podman
+-w /usr/bin/containerd -p x -k T1610_containerd
+-w /usr/bin/runc       -p x -k T1610_runc
+-w /usr/bin/crictl     -p x -k T1610_crictl
+-w /usr/bin/kubelet    -p x -k T1610_kubelet
+
+## --- Package managers -------------------------------------------------------
+-w /usr/bin/rpm -p x -k T1072_pkg
+-w /usr/bin/yum -p x -k T1072_pkg
+-w /usr/bin/dnf -p x -k T1072_pkg
+-w /usr/bin/zypper -p x -k T1072_pkg
+-w /usr/bin/dpkg -p x -k T1072_pkg
+-w /usr/bin/apt-get -p x -k T1072_pkg
+-w /usr/bin/apt-add-repository -p x -k T1072_pkg
+-w /usr/bin/pip  -p x -k T1072_pkg
+-w /usr/bin/pip3 -p x -k T1072_pkg
+-w /usr/bin/npm  -p x -k T1072_pkg
+-w /usr/bin/gem  -p x -k T1072_pkg
+
+## --- Lock ------------------------------------------------------------------
+## No rule changes until reboot. Must be last.
+-e 2

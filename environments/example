@@ -4,55 +4,52 @@
 #
 #   ansible-playbook site.yml -i environments/<the file you just created>
 #
-# Placeholders are quoted so this file stays valid YAML as shipped -- you can
-# run the command above against it and get a real error about unreachable
-# hosts, rather than an inventory that will not parse. Replace the quoted
-# values; the quotes may stay.
+# The placeholders are quoted, so this file parses as shipped and a run against
+# it fails on unreachable hosts rather than on the inventory.
 all:
   hosts:
-    # One entry per endpoint to audit. Add or remove lines as needed -- each
-    # host needs its own distinct line.
+    # One line per host to audit.
     "<ip address or DNS name of host 1 here>":
     "<ip address or DNS name of host 2 here>":
     "<ip address or DNS name of host 3 here>":
   vars:
-    # The collector that receives the forwarded streams (rsyslog omfwd): audit
-    # on TCP 12201, general syslog on TCP 12205. One address for every host in
-    # this inventory.
-    collector_address: "<ip address or DNS name of the local collector here>"
+    # The syslog receiver for every host in this inventory, such as EdgeStream
+    # Hub: audit records go to TCP 12201, other syslog to TCP 12205.
+    hyperi_audit_receiver_address: "<ip address or DNS name of the receiver here>"
 
-    # --- Transport (optional) -------------------------------------------------
-    # How the streams leave the endpoint. Default is plain TCP (unchanged), so
-    # leaving all of the below unset keeps the existing behaviour.
-    #   tcp        - plaintext TCP. Pair with a network tunnel if the path is
-    #                untrusted.
-    #   relp       - RELP: reliable, acknowledged delivery to any RELP receiver.
-    #                Not encrypted - use relp-tls for that.
-    #   syslog-tls - syslog over TLS. The recommended encrypted transport; the
-    #                Edge Stream Hub and dfe-receiver both accept it.
-    #   relp-tls   - RELP over TLS: reliable AND encrypted.
-    # RELP reaches any standard RELP receiver today; HyperI's own receivers gain
-    # RELP ingest in a future release (see docs/transport.md).
+    # Connect with an SSH key. Keep any become password in an ansible-vault
+    # file, or type it at -K, never here in plain text.
+    # ansible_user: "deploy"
+
+    # --- Ruleset (optional) ----------------------------------------------------
+    # low | medium (default) | high. Each level holds the one below it.
+    # hyperi_audit_level: "medium"
+    # Overlays: any of webserver, edge, container-host.
+    # hyperi_audit_use_cases: ["edge", "webserver"]
+
+    # --- Transport (optional) --------------------------------------------------
+    #   tcp        - plain TCP syslog, the default.
+    #   syslog-tls - syslog over TLS. EdgeStream Hub accepts it.
+    #   relp       - acknowledged delivery to a RELP receiver, not encrypted.
+    #   relp-tls   - RELP over TLS.
+    # EdgeStream Hub has no RELP ingest yet (see docs/transport.md).
     # hyperi_audit_transport: "syslog-tls"
 
-    # TLS trust model - only used by syslog-tls / relp-tls.
-    #   anon   - encryption only, no certificates (deploy-and-go). Does NOT
-    #            authenticate the receiver, so use it only over a trusted or VPN
-    #            path. It also needs anonymous ciphers, which hardened hosts
-    #            (RHEL8+/OpenSSL3) disable - move to server/mutual there. For
-    #            relp-tls, anon is the only certificate-free option (librelp
-    #            forces mutual for any authenticated mode).
-    #   server - validate the receiver's certificate; no client cert on the
-    #            endpoint. syslog-tls only (not relp-tls). Needs the CA below.
-    #   mutual - mutual TLS with a client certificate. Needs the CA, client cert
-    #            and client key below.
-    # hyperi_audit_tls_mode: "anon"
+    # TLS trust, for syslog-tls and relp-tls:
+    #   anon   - encrypts, checks no certificate. Use it on a trusted path only.
+    #            Hosts whose crypto policy turns off anonymous ciphers
+    #            (RHEL 8 and later) need server or mutual.
+    #   server - checks the receiver's certificate. Needs the CA. Not for
+    #            relp-tls.
+    #   mutual - both ends present certificates. Needs the CA, client cert and
+    #            client key.
+    # hyperi_audit_tls_mode: "server"
     # hyperi_audit_tls_ca_file: "/etc/pki/hyperi/ca.pem"
-    # hyperi_audit_tls_permitted_peer: "collector.example.com"
+    # hyperi_audit_tls_permitted_peer: "receiver.example.com"
     # hyperi_audit_tls_client_cert: "/etc/pki/hyperi/client.pem"
     # hyperi_audit_tls_client_key: "/etc/pki/hyperi/client.key"
 
-    # Forwarding ports (defaults shown). For TLS, point these at the receiver's
-    # TLS listeners (for example 6514 for syslog-tls).
+    # Receiver ports (defaults shown). For TLS, point them at the receiver's TLS
+    # listener, such as 6514.
     # hyperi_audit_port_audit: "12201"
     # hyperi_audit_port_syslog: "12205"

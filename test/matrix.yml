@@ -1,5 +1,4 @@
-# HyperI Linux audit collector - test matrix.
-# Each entry is ONE distro+version case (the pytest parametrization unit).
+# Test matrix: one entry per distro and version, the pytest parametrisation unit.
 #   family:   el | deb | suse  -> selects the bake Dockerfile + package manager
 #   base:     upstream image (OSS/non-licensed only - Rocky/Alma/OL/openSUSE
 #             Leap/Ubuntu/Debian/Amazon Linux; no RHEL/SLES/Pro/ESM/TuxCare)

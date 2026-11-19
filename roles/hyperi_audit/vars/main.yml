@@ -1,0 +1,83 @@
+---
+# Every directory hyperi-audit.rules.j2 watches. The role checks which exist
+# here: those get a cheap syscall-scoped rule, the rest a path watch.
+hyperi_audit_watch_dirs:
+  - /var/log/audit
+  - /etc/audit
+  - /etc/audisp
+  - /etc/modprobe.d
+  - /etc/sysctl.d
+  - /etc/cron.d
+  - /etc/cron.daily
+  - /etc/cron.hourly
+  - /etc/cron.monthly
+  - /etc/cron.weekly
+  - /var/spool/cron
+  - /var/spool/at
+  - /etc/init.d
+  - /etc/init
+  - /etc/systemd/system
+  - /usr/lib/systemd/system
+  - /etc/systemd
+  - /usr/lib/systemd
+  - /run/systemd/system
+  - /etc/update-motd.d
+  - /etc/udev/rules.d
+  - /etc/xdg/autostart
+  - /etc/sudoers.d
+  - /etc/pam.d
+  - /etc/security/limits.d
+  - /etc/ld.so.conf.d
+  - /etc/profile.d
+  - /etc/ssh/sshd_config.d
+  - /root/.ssh
+  - /etc/sysconfig/network-scripts
+  - /etc/network
+  - /etc/NetworkManager
+  - /etc/rsyslog.d
+  - /etc/selinux
+  - /etc/apparmor
+  - /etc/apparmor.d
+  - /etc/postfix
+  - /etc/exim4
+  - /etc/docker
+  - /var/opt/BESClient
+  - /opt/BESClient
+  - /etc/chef
+  - /etc/salt
+  - /etc/puppet/ssl
+  - /etc/modules-load.d
+  - /usr/lib64/security
+  - /usr/lib/x86_64-linux-gnu/security
+  - /usr/lib/aarch64-linux-gnu/security
+  - /usr/lib/security
+  - /etc/systemd/system-generators
+  - /usr/local/lib/systemd/system-generators
+  - /usr/local/lib/systemd
+  - /boot
+  - /usr/lib/udev/rules.d
+  - /run/udev/rules.d
+  - /etc/polkit-1
+  - /etc/krb5.conf.d
+  - /etc/sssd
+  - /etc/iptables
+  - /etc/syslog-ng
+  - /var/www
+  - /srv/www
+  - /srv/http
+  - /usr/share/nginx/html
+
+
+# ausyscall table names per host architecture: b64 is the native ABI, b32 the
+# 32-bit compat ABI the tripwire rules watch.
+hyperi_audit_syscall_tables:
+  x86_64: {b64: x86_64, b32: i386}
+  aarch64: {b64: aarch64, b32: arm}
+
+# The config each service reads at start. A change since the last applied
+# fingerprint restarts it.
+hyperi_audit_service_config:
+  auditd: [/etc/audit/auditd.conf, /etc/audit/rules.d]
+  rsyslog: [/etc/rsyslog.conf, /etc/rsyslog.d]
+
+hyperi_audit_stamp: /var/lib/hyperi_audit/applied.json

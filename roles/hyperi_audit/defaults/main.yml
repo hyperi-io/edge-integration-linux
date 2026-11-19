@@ -1,0 +1,48 @@
+---
+# Receiver for both streams: IP or DNS name. collector_address is the
+# pre-rename name, still read when this one is unset.
+hyperi_audit_receiver_address: "{{ collector_address | default('') }}"
+
+# Ruleset depth. Levels are cumulative: medium is low plus more, high is
+# medium plus more.
+hyperi_audit_level: medium
+
+# Overlays applied on top of the level. Any of: webserver, edge, container-host.
+# docs/configuration.md describes what each one adds and removes.
+hyperi_audit_use_cases: []
+
+# Accounts the webserver overlay treats as web servers. Those that exist on the
+# host are resolved to uids at deploy time.
+hyperi_audit_webserver_users:
+  - www-data
+  - apache
+  - nginx
+  - httpd
+  - lighttpd
+  - caddy
+
+# Medium watches each login account's authorized_keys, and high its shell
+# start-up files too, for at most this many accounts. Each watch costs every
+# syscall about 2 ns.
+hyperi_audit_user_watch_max: 20
+
+# Deprecated: low|medium|high sets the level, internet means medium with the
+# edge and webserver overlays. Use hyperi_audit_level and hyperi_audit_use_cases.
+hyperi_audit_profile_override: ""
+
+# tcp | syslog-tls | relp | relp-tls
+hyperi_audit_transport: tcp
+
+# TLS trust for syslog-tls and relp-tls: anon | server | mutual.
+# relp-tls supports anon and mutual only.
+hyperi_audit_tls_mode: anon
+hyperi_audit_tls_ca_file: ""
+hyperi_audit_tls_client_cert: ""
+hyperi_audit_tls_client_key: ""
+hyperi_audit_tls_permitted_peer: ""
+
+hyperi_audit_port_audit: "12201"
+hyperi_audit_port_syslog: "12205"
+
+# false writes the config without touching services (the container harness).
+hyperi_audit_start_services: true

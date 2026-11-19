@@ -1,0 +1,34 @@
+---
+# Renders the audit ruleset for one level and overlay set, for this host's
+# directories and syscall table. test_kernel.py passes -e out=<file>
+# -e level=<level> -e use_cases=<list>.
+- name: Render the audit ruleset
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  gather_subset: [min]
+  vars:
+    hyperi_audit_effective_level: "{{ level }}"
+    hyperi_audit_effective_use_cases: "{{ use_cases | default([]) }}"
+    hyperi_audit_webserver_uids: "{{ webserver_uids | default([33]) }}"
+    hyperi_audit_template_src: "{{ playbook_dir }}/../roles/hyperi_audit/templates/hyperi-audit.rules.j2"
+  tasks:
+    - name: Load the role's defaults
+      ansible.builtin.include_vars:
+        file: ../roles/hyperi_audit/defaults/main.yml
+
+    - name: Load the role's directory list and syscall table names
+      ansible.builtin.include_vars:
+        file: ../roles/hyperi_audit/vars/main.yml
+
+    - name: Probe the host as the role does
+      ansible.builtin.include_tasks:
+        file: ../roles/hyperi_audit/tasks/host_probe.yml
+        apply:
+          become: true
+
+    - name: Write the rendered ruleset
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../roles/hyperi_audit/templates/hyperi-audit.rules.j2') }}"
+        dest: "{{ out }}"
+        mode: "0644"

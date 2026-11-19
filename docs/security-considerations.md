@@ -1,156 +1,39 @@
-<!--
-Project:      HyperI Linux audit collector
-File:         docs/security-considerations.md
-Purpose:      Reference -- the security properties and trade-offs of deploying
-              this role, grounded in what the code actually does.
-License:      Apache-2.0
-Copyright:    (c) 2026 HYPERI PTY LIMITED
--->
-
 # Security considerations
 
-Read this before deploying to anything you care about. The role is small and
-does one job well, but it makes deliberate trade-offs that an operator must
-understand and, in one case, must compensate for. The headline: **by default the
-audit stream leaves the host in cleartext**. The role ships an opt-in encrypted
-transport, but it is off unless you turn it on. Everything else on this page is
-secondary to that.
+Read this before you deploy to hosts you care about. The role runs as root, changes how the host audits, and by default sends what it collects in cleartext.
 
-## Transport is plaintext by default -- encryption is opt-in
+The default transport is plain TCP to ports 12201 and 12205. Audit records hold the commands people ran, the files they touched and every privilege change, so anyone on the path can read them and anyone in the path can alter them. On any link you do not control, set `hyperi_audit_transport: syslog-tls` with `hyperi_audit_tls_mode: server` or `mutual` ([transport](transport.md)). `anon` encrypts but authenticates nobody, so it stops a passive listener and not an active one.
 
-By default the rsyslog forwarder sends both streams with the `omfwd` action over
-plain TCP: audit records to `collector_address` on **TCP 12201**, general syslog
-on **TCP 12205**. The legacy (rsyslog < 7) template does the same with
-`@@host:port`. On the default the stream is **cleartext on the wire**.
+The endpoint opens no listening port. It connects out to the receiver, and on SELinux hosts the role labels the receiver ports `syslogd_port_t` so rsyslog may do that.
 
-That matters because of *what* is on the wire. Audit records carry the commands
-users ran, the files they touched, and authentication and privilege-escalation
-events -- exactly the material an attacker who can sniff the link would want.
-Sending it unencrypted across an untrusted network exposes it to interception
-and to tampering in transit.
+## The role adds rules, and its control lines govern the host
 
-The role now offers a built-in encrypted transport: set
-`hyperi_audit_transport: syslog-tls` and the same streams travel over TLS
-(`omfwd` + the `gtls` driver). `relp-tls` adds reliable delivery on top of the
-encryption. The full setup -- transports, trust modes and which one suits which
-receiver -- is in [transport](transport.md).
+The role writes one file, `/etc/audit/rules.d/hyperi-audit.rules`, and leaves the distro's files and yours in `rules.d` alone. `augenrules` merges them all and keeps the last `-b`, `-f`, `--backlog_wait_time` and `-e` it reads, which are the role's, because its file sorts after `audit.rules` and every `NN-*.rules`. Those settings then apply to the whole merged ruleset:
 
-> **Warning:** encryption is **off by default**. On any link you do not fully
-> trust -- anything crossing a data-centre boundary, a shared segment, or the
-> public internet -- either turn on the built-in `syslog-tls` transport
-> ([transport](transport.md)) or put a TLS tunnel
-> (`stunnel`) between the endpoint and the receiver yourself. Tellingly, the
-> rulesets themselves watch `stunnel` execution as a covered-channel technique
-> (MITRE ATT&CK **T1573.002**) -- the product already assumes tunnels exist in
-> the environment.
+- `-e 2` locks every rule on the host until reboot, the distro's included. Any tool that changes audit rules at run time fails from then on.
+- `--backlog_wait_time 0` drops records when the kernel backlog is full, rather than stalling every syscall. A flood of events can push records out, and `auditctl -s` counts them under `lost`.
+- `-f 1` logs an audit failure to the kernel log and carries on. The host never panics over audit.
+- Loading the merged set flushes the kernel first, so rules added by hand with `auditctl` and never written to `rules.d` are gone.
 
-```mermaid
-flowchart LR
-  ep["Endpoint<br/>auditd + rsyslog omfwd"]
-  collector([Collector])
-  ep -->|DEFAULT - cleartext TCP 12201 and 12205| collector
-  ep -.->|opt-in - hyperi_audit_transport=syslog-tls| collector
-```
+The first matching rule in load order decides an event, and the distro's files load before the role's. A broad `never` rule in one of them silences the matching HyperI rules ([rulesets](rulesets.md)).
 
-## The role takes over host auditing -- existing rules are displaced
+From the second run on, the kernel is locked by the first run's `-e 2`. The role sees the lock, restarts auditd so the `auditd.conf` changes apply, and leaves the changed rules for the next reboot. A clean run on a locked host therefore does not mean the changed rules are live. Check after the reboot with `auditctl -l` and a known audited action reaching the receiver.
 
-This is not an additive role. It replaces the host's audit configuration:
+While auditd restarts, the kernel holds records in its backlog, and a busy host can overflow it and lose some. The role restarts only when the config changed or the host is out of step with it, so a repeat run with nothing to change leaves the services running.
 
-- **Every ruleset begins with `-D`**, which flushes all existing kernel audit
-  rules before loading the HyperI set.
-- The distro's own rules file is **renamed aside** to `<path>.default`
-  (`/etc/audit/rules.d/audit.rules.default`, or `/etc/audit/audit.rules.default`
-  on auditd v1). It is a backup, not an active file: `augenrules` only merges
-  files ending in `.rules`, so a `.default` file is **not** read back in. The
-  displaced rules are saved but inert.
-- **`auditd.conf` is rewritten** line by line (`name_format`, `log_group`,
-  `flush`, `priority_boost`, log rotation and more -- see
-  [configuration](configuration.md)).
+## What else the role changes, and what it needs from you
 
-> **Warning:** A host carrying bespoke, compliance, or STIG audit rules **loses
-> them** on deploy -- they are backed up to `.default` but not loaded. Reconcile
-> any existing rules into the chosen HyperI profile (or a site overlay) *before*
-> deploying, or you trade one detection posture for another without noticing.
+| Change | What to know |
+|---|---|
+| Upgrades `rsyslog` and the audit package to the distro's latest release on every run | A run is a package upgrade for those two. |
+| Edits nine values in `/etc/audit/auditd.conf` in place | No backup is kept. Capture the stock file first if you may want it back. |
+| Sets `log_group = adm` on Debian and Ubuntu | Every member of `adm` can read `audit.log`. Elsewhere it stays `root`. |
+| Writes the rules file `0640` and the rsyslog drop-in `0644`, both owned by root | The drop-in names the receiver and the certificate paths, never key material. |
+| Loads the SELinux module `rsyslog_read_audit_logs` | It grants `syslogd_t` read access to the audit log, and nothing more. |
+| Lifts `RefuseManualStop` for the auditd restart | Through a drop-in under `/run`, removed when the restart ends and gone at reboot. The packaged unit file is not edited. |
 
-Note the asymmetry in what is backed up: the role backs up the **rules**
-(`.default`) but does **not** back up `auditd.conf` -- it edits the live file in
-place. Capture the stock `auditd.conf` from config management first if you may
-need to restore it (see [uninstall](uninstall.md)).
+[Uninstall](uninstall.md) reverses each of these by hand. There is no task that undoes a deploy.
 
-## "Deployed" does not always mean "rules active"
+Use SSH keys for the connection, and keep any `become` password in an `ansible-vault` file or type it at `-K`. Never write `ansible_password` in plain text in an inventory, and keep SSH host key checking on.
 
-Every ruleset ends with `-e 2`, which makes the kernel audit configuration
-**immutable** until the next reboot. From the *second* deploy onward the host is
-already immutable, so a re-run **cannot load the new rules** -- the kernel
-refuses them until it reboots. The role's own comments and
-[ARCHITECTURE.md](../ARCHITECTURE.md) spell this out.
-
-The payload splits in two, and immutability blocks only half of it:
-
-- **`auditd.conf` tuning** is daemon config, read at daemon start. It applies on
-  the in-run restart even when the config is immutable.
-- **The `.rules` file** is kernel state. Under `-e 2` it lands only at the next
-  reboot.
-
-So a green play run does not prove the new *rules* are active. Verify the
-ruleset **after the planned reboot** -- `auditctl -s` reporting `enabled 2` and a
-known audited action arriving at the collector -- not merely after the play. The
-fleet guide builds this into its rollout gate
-([deploying to a fleet](deploying-to-a-fleet.md)).
-
-## There is a brief auditing gap during the deploy
-
-To swap the ruleset the role **stops** `auditd`, then **starts** it again (and
-does the same for `rsyslog`). Between the stop and the start there is a short
-window in which the host is **not auditing at all**. On a fleet, a failed run can
-leave a host with no running audit daemon -- a security regression, not just a
-failed deploy. This is why the fleet rollout is staged and gated rather than a
-fan-out; do not deploy to crown-jewel hosts first.
-
-> **Note:** whether the older `auditd` in range (2.4.x on el6 upward) even
-> *permits* a manual stop while the config is immutable is **UNVERIFIED** and
-> must be proven on real hardware before production rollout -- a container cannot
-> answer it. See [deploying to a fleet](deploying-to-a-fleet.md), "Stage 0".
-
-## Privilege and network posture
-
-- **Root on the endpoint.** The role runs with `become` as `root` -- it installs
-  packages and writes under `/etc`. Grant it no less and no more.
-- **SSH from the control node.** You drive the deploy over SSH from a control
-  node with an account that can escalate; the endpoint needs no agent. For
-  el6-era targets this includes an old-cipher SSH allowance -- see
-  [deploying to legacy targets](deploying-to-legacy-targets.md).
-- **Outbound only -- no inbound ports opened.** The role forwards *out* to the
-  collector; it does **not** open a listening port on the endpoint. Where SELinux
-  is enforcing it adds `syslogd_port_t` bindings for the configured collector
-  ports (TCP 12201 and 12205 by default, or the TLS ports you set), which permit
-  rsyslog to *connect out* on those ports -- not to accept connections. The
-  endpoint's attack surface does not grow by a listener.
-
-## Profile choice is a security-versus-volume trade-off
-
-The `low`/`medium`/`high`/`internet` profiles trade **detection breadth against
-host CPU and forwarding bandwidth**. A higher profile detects more but generates
-more events, costs more host CPU, and puts more on the (cleartext, see above)
-link. Picking the widest profile for a constrained or slow-link host is its own
-kind of risk. The selection mechanics and the per-profile contents are in
-[configuration](configuration.md).
-
-The detection lineage -- the merge order across the public baselines (Neo23x0,
-ACSC, NIST, DISA STIG, alphagov/GDS, US DoD, SigmaHQ), the MITRE ATT&CK key
-mappings and the SigmaHQ alignment -- lives in the `# HISTORY.` header of each
-`roles/hyperi_audit/files/hyperi-audit-<profile>.rules` file. Read that header
-before trusting or editing a ruleset; it is the authoritative record of what each
-profile does and does not cover.
-
-## See also
-
-- [Uninstall](uninstall.md) -- the manual removal and restore runbook (there is
-  no built-in undo).
-- [Configuration](configuration.md) -- the profiles and every role variable.
-- [Deploying to a fleet](deploying-to-a-fleet.md) -- staged rollout, the
-  immutable-stop question, and the between-batch health gate.
-- [Deploying to legacy targets](deploying-to-legacy-targets.md) -- pinned ansible
-  and old-cipher SSH for el6-era hosts.
-- [ARCHITECTURE.md](../ARCHITECTURE.md) -- the pipeline, deploy order and the
-  maintainer invariants.
+Client private keys for `mutual` TLS belong on the endpoint as `0600` root, or `0640` root and the rsyslog group where rsyslog drops privileges (`syslog` on Ubuntu). The role reads the paths and never copies keys.

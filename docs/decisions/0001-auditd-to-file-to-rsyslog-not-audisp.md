@@ -17,7 +17,7 @@ Accepted.
 
 We ship one collector across a distro range from el6 (auditd 2.4.x, kernel
 2.6.32) to current, end-of-life releases explicitly included -- see
-[`../SUPPORTED-DISTROS.md`](../SUPPORTED-DISTROS.md) for why the old boxes are a
+[`../supported-distros.md`](../supported-distros.md) for why the old boxes are a
 product feature rather than legacy debt. Audit records have to reach a central
 collector from every one of them.
 
@@ -56,12 +56,12 @@ Read `/var/log/audit/audit.log` with rsyslog's `imfile` and forward it with
   configured under `/etc/audisp/plugins.d` in audit 2.x (RHEL/CentOS 5/6/7), and
   was deprecated and restructured in the audit 3.x era -- merged into `auditd`
   with plugins under `/etc/audit/plugins.d`. One transport with two different
-  shapes and two different config locations, split down the middle of the range
+  forms and two different config locations, split down the middle of the range
   we support.
-- **rsyslog is a constant, and we need it anyway.** It is present or trivially
+- **rsyslog is a constant, and we need it anyway.** It is present or easily
   available on every target, and the role deploys it regardless for the general
   syslog stream. Forwarding audit through it adds a config file, not a component.
-- **The collector is a syslog receiver.** It consumes syslog-shaped lines, not
+- **The collector is a syslog receiver.** It consumes syslog lines, not
   native audisp records, so audisp would need a translation layer that the file
   path does not.
 - **Fewer components, fewer failures.** Each one we drop removes inter-distro
@@ -100,9 +100,9 @@ Bad, and we accept it:
 
 ## More information
 
-- [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) -- the pipeline, ports and
+- [`../architecture.md`](../architecture.md) -- the pipeline, ports and
   SELinux boundary this decision produces.
-- [`../SUPPORTED-DISTROS.md`](../SUPPORTED-DISTROS.md) -- the distro range that
+- [`../supported-distros.md`](../supported-distros.md) -- the distro range that
   drives it.
 - [`../../test/README.md`](../../test/README.md) -- what the harness proves about
   the forwarding path, and what it cannot.

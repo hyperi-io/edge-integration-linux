@@ -1,0 +1,64 @@
+---
+- name: Create the rsyslog drop-in directory
+  ansible.builtin.file:
+    path: /etc/rsyslog.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Modern rsyslog (EL8+, Amazon Linux) includes rsyslog.d with RainerScript
+# include(), which lineinfile's exact match cannot see. A second include makes
+# rsyslog parse the drop-in twice and report the config as errored.
+- name: Check whether rsyslog.conf already includes rsyslog.d
+  ansible.builtin.command:
+    argv: [grep, -Eq, "{{ hyperi_audit_include_re }}", /etc/rsyslog.conf]
+  register: hyperi_audit_dropin_included
+  changed_when: false
+  failed_when: hyperi_audit_dropin_included.rc > 1
+  vars:
+    # An active line that pulls in every .conf file, so a commented-out or
+    # single-file include does not count.
+    hyperi_audit_include_re: >-
+      ^\s*(\$IncludeConfig\s+/etc/rsyslog\.d/(\*(\.conf)?)?\s*$|include\(.*file="/etc/rsyslog\.d/\*(\.conf)?")
+
+- name: Check whether rsyslog.conf sets a legacy work directory
+  ansible.builtin.command:
+    argv: [grep, -Eq, '^\s*\$WorkDirectory', /etc/rsyslog.conf]
+  register: hyperi_audit_workdir
+  changed_when: false
+  failed_when: hyperi_audit_workdir.rc > 1
+  when: hyperi_audit_rsyslog_legacy | bool
+
+- name: Record whether the work directory is set
+  ansible.builtin.set_fact:
+    hyperi_audit_rsyslog_workdir_set: "{{ (hyperi_audit_workdir.rc | default(1)) == 0 }}"
+
+- name: Include rsyslog.d from rsyslog.conf
+  ansible.builtin.lineinfile:
+    path: /etc/rsyslog.conf
+    insertafter: EOF
+    line: "$IncludeConfig /etc/rsyslog.d/*.conf"
+    state: present
+  when: hyperi_audit_dropin_included.rc != 0
+  notify: hyperi_audit restart
+
+- name: Write the forwarder drop-in
+  ansible.builtin.template:
+    src: "{{ '99-hyperi-rsyslog-legacy.j2' if hyperi_audit_rsyslog_legacy else '99-hyperi-rsyslog.j2' }}"
+    dest: /etc/rsyslog.d/99-hyperi-rsyslog.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: hyperi_audit restart
+
+# rsyslogd -N1 parses the whole config without starting the daemon. It exits
+# non-zero on some warnings, so only an error line fails the run.
+- name: Check the rsyslog config parses
+  ansible.builtin.command:
+    argv: [rsyslogd, -N1]
+  register: hyperi_audit_rsyslog_check
+  changed_when: false
+  failed_when: >-
+    hyperi_audit_rsyslog_check.rc != 0
+    and (hyperi_audit_rsyslog_check.stdout ~ hyperi_audit_rsyslog_check.stderr) is search('(?i)error')

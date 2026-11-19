@@ -1,0 +1,173 @@
+---
+# Inputs land in rsyslog config and auditd rules, so anything that could break
+# out of a quoted value fails here.
+
+- name: Resolve the deprecated profile override into a level and overlays
+  ansible.builtin.set_fact:
+    hyperi_audit_effective_level: >-
+      {{ hyperi_audit_profile_override
+         if hyperi_audit_profile_override in ['low', 'medium', 'high']
+         else ('medium' if hyperi_audit_profile_override == 'internet' else hyperi_audit_level) }}
+    hyperi_audit_effective_use_cases: >-
+      {{ (hyperi_audit_use_cases
+          + (['edge', 'webserver'] if hyperi_audit_profile_override == 'internet' else []))
+         | unique }}
+
+- name: Check the receiver address
+  ansible.builtin.assert:
+    that:
+      - hyperi_audit_receiver_address | length > 0
+    fail_msg: "receiver address is not set: set hyperi_audit_receiver_address"
+    quiet: true
+
+- name: Check the receiver address is a host name or IP address
+  ansible.builtin.assert:
+    that:
+      - hyperi_audit_receiver_address is match(hyperi_audit_hostname_re) or hyperi_audit_receiver_address is match(hyperi_audit_ipv6_re)
+    fail_msg: "hyperi_audit_receiver_address must be a host name or IP address, with no port (got '{{ hyperi_audit_receiver_address }}')"
+    quiet: true
+  vars:
+    # Host names and IPv4 have no colon, IPv6 has at least two, so host:port fails both.
+    hyperi_audit_hostname_re: '^(?=.{1,253}\Z)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?\Z'
+    hyperi_audit_ipv6_re: '^(?=.*:.*:)[0-9A-Fa-f:.]{2,45}\Z'
+
+- name: Check the per-user watch cap
+  ansible.builtin.assert:
+    that:
+      - hyperi_audit_user_watch_max | string is match('^[0-9]+\Z')
+    fail_msg: "hyperi_audit_user_watch_max must be a whole number, 0 or more (got '{{ hyperi_audit_user_watch_max }}')"
+    quiet: true
+
+- name: Check the ruleset level
+  ansible.builtin.assert:
+    that:
+      - hyperi_audit_level in ['low', 'medium', 'high']
+    fail_msg: "hyperi_audit_level must be one of low|medium|high (got '{{ hyperi_audit_level }}')"
+    quiet: true
+
+- name: Check the deprecated profile override
+  ansible.builtin.assert:
+    that:
+      - hyperi_audit_profile_override in ['', 'low', 'medium', 'high', 'internet']
+    fail_msg: "hyperi_audit_profile_override must be one of low|medium|high|internet (got '{{ hyperi_audit_profile_override }}')"
+    quiet: true
+
+- name: Check the overlays
+  ansible.builtin.assert:
+    that:
+      - hyperi_audit_use_cases is sequence
+      - hyperi_audit_use_cases is not string
+      - hyperi_audit_use_cases | difference(['webserver', 'edge', 'container-host']) | length == 0
+    fail_msg: "hyperi_audit_use_cases must be a list of webserver|edge|container-host (got {{ hyperi_audit_use_cases }})"
+    quiet: true
+
+- name: Warn that the deprecated profile override replaces the level
+  ansible.builtin.debug:
+    msg: >-
+      hyperi_audit_profile_override={{ hyperi_audit_profile_override }} is deprecated and
+      replaces hyperi_audit_level. Running level {{ hyperi_audit_effective_level }} with
+      overlays {{ hyperi_audit_effective_use_cases }}.
+  when: hyperi_audit_profile_override | length > 0
+
+- name: Check the transport
+  ansible.builtin.assert:
+    that:
+      - hyperi_audit_transport in ['tcp', 'syslog-tls', 'relp', 'relp-tls']
+    fail_msg: "hyperi_audit_transport must be one of tcp|syslog-tls|relp|relp-tls (got '{{ hyperi_audit_transport }}')"
+    quiet: true
+
+- name: Check the forward ports
+  ansible.builtin.assert:
+    that:
+      - item.value | string is match('^[0-9]{1,5}\\Z')
+      - item.value | int >= 1
+      - item.value | int <= 65535
+    fail_msg: "{{ item.key }} must be a TCP port, 1-65535 (got '{{ item.value }}')"
+    quiet: true
+  loop: "{{ {'hyperi_audit_port_audit': hyperi_audit_port_audit, 'hyperi_audit_port_syslog': hyperi_audit_port_syslog} | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Check the TLS settings
+  when: hyperi_audit_transport in ['syslog-tls', 'relp-tls']
+  block:
+    - name: Check the TLS trust mode
+      ansible.builtin.assert:
+        that:
+          - hyperi_audit_tls_mode in ['anon', 'server', 'mutual']
+        fail_msg: "hyperi_audit_tls_mode must be one of anon|server|mutual (got '{{ hyperi_audit_tls_mode }}')"
+        quiet: true
+
+    # librelp negotiates mutual TLS for every authenticated mode.
+    - name: Reject relp-tls with server-only trust
+      ansible.builtin.assert:
+        that:
+          - not (hyperi_audit_transport == 'relp-tls' and hyperi_audit_tls_mode == 'server')
+        fail_msg: "relp-tls does not support tls_mode=server (librelp forces mutual auth) - use anon or mutual"
+        quiet: true
+
+    - name: Require a CA for server and mutual trust
+      ansible.builtin.assert:
+        that:
+          - hyperi_audit_tls_mode == 'anon' or hyperi_audit_tls_ca_file | length > 0
+        fail_msg: "hyperi_audit_tls_ca_file must be set for tls_mode={{ hyperi_audit_tls_mode }}"
+        quiet: true
+
+    - name: Require a client certificate and key for mutual trust
+      ansible.builtin.assert:
+        that:
+          - hyperi_audit_tls_mode != 'mutual' or (hyperi_audit_tls_client_cert | length > 0 and hyperi_audit_tls_client_key | length > 0)
+        fail_msg: "hyperi_audit_tls_client_cert and hyperi_audit_tls_client_key must both be set for tls_mode=mutual"
+        quiet: true
+
+    - name: Check the TLS file paths are absolute and unquoted
+      ansible.builtin.assert:
+        that:
+          - item.value | length == 0 or item.value is match('^/[^"\\\\\s]+\\Z')
+        fail_msg: "{{ item.key }} must be an absolute path with no quotes or whitespace (got '{{ item.value }}')"
+        quiet: true
+      loop: "{{ hyperi_audit_tls_files | dict2items }}"
+      vars:
+        hyperi_audit_tls_files:
+          hyperi_audit_tls_ca_file: "{{ hyperi_audit_tls_ca_file }}"
+          hyperi_audit_tls_client_cert: "{{ hyperi_audit_tls_client_cert }}"
+          hyperi_audit_tls_client_key: "{{ hyperi_audit_tls_client_key }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Check the permitted peer
+      ansible.builtin.assert:
+        that:
+          - hyperi_audit_tls_permitted_peer is match('^[^"\\\\\s]*\\Z')
+        fail_msg: "hyperi_audit_tls_permitted_peer must have no quotes or whitespace (got '{{ hyperi_audit_tls_permitted_peer }}')"
+        quiet: true
+
+    # Without a peer name, x509/certvalid accepts any certificate the CA signed.
+    - name: Require a peer name when the receiver address is an IP
+      ansible.builtin.assert:
+        that:
+          - >-
+            hyperi_audit_tls_mode == 'anon'
+            or hyperi_audit_tls_permitted_peer | length > 0
+            or not (hyperi_audit_receiver_address is match('^[0-9.]+$')
+                    or ':' in hyperi_audit_receiver_address)
+        fail_msg: >-
+          hyperi_audit_tls_permitted_peer must be set for tls_mode={{ hyperi_audit_tls_mode }}
+          when the receiver address is an IP: name the receiver certificate's subject
+        quiet: true
+
+- name: Name the receiver certificate the TLS check expects
+  ansible.builtin.set_fact:
+    hyperi_audit_tls_peer: >-
+      {{ hyperi_audit_tls_permitted_peer
+         if hyperi_audit_tls_permitted_peer | length > 0
+         else hyperi_audit_receiver_address }}
+
+- name: Log the deployment selection
+  ansible.builtin.debug:
+    msg: >-
+      {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_major_version'] }}:
+      level {{ hyperi_audit_effective_level }}, overlays {{ hyperi_audit_effective_use_cases }},
+      transport {{ hyperi_audit_transport }}{% if hyperi_audit_transport in ['syslog-tls', 'relp-tls'] %}
+      ({{ hyperi_audit_tls_mode }}){% endif %}, audit -> {{ hyperi_audit_receiver_address }}:{{ hyperi_audit_port_audit }},
+      syslog -> {{ hyperi_audit_receiver_address }}:{{ hyperi_audit_port_syslog }}

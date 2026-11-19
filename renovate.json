@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "The org preset, plus test/: config:recommended ignores test directories, and every resolver surface here lives in test/.",
+  "extends": ["github>hyperi-io/renovate-config"],
+  "ignorePaths": ["**/node_modules/**"],
+  "packageRules": [
+    {
+      "description": "Group the harness Python lock (pep621 reads test/pyproject.toml and test/uv.lock).",
+      "matchFileNames": ["test/pyproject.toml"],
+      "groupName": "harness-python"
+    },
+    {
+      "description": "Group the harness Ansible collections.",
+      "matchManagers": ["ansible-galaxy"],
+      "groupName": "harness-ansible-collections"
+    }
+  ]
+}

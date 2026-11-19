@@ -1,51 +1,49 @@
-# HyperI base system rsyslog configuration
-# License:      Apache-2.0
-# Copyright:    (c) 2026 HYPERI PTY LIMITED
-#
-# v3.0      2026-07-22      Optional transport. hyperi_audit_transport selects
-#                          plain TCP (default, unchanged), syslog-over-TLS
-#                          (omfwd + gtls), RELP (omrelp - reliable, acknowledged
-#                          delivery) or RELP-over-TLS (omrelp + TLS). TLS trust is
-#                          hyperi_audit_tls_mode: anon (encryption only, no certs),
-#                          server (validate the receiver cert, no client cert) or
-#                          mutual (client cert). RELP has no server-only mode -
-#                          librelp forces mutual - so relp-tls is anon or mutual.
-# v2.4      2022-11-21      Merged ruleset
-# v2.3      2022-09-28      Old release distro RHEL 5/4 changes
-# v2.2      2022-09-26      Fork for multi distro and legacy/EOLife Linux endpoints
-# v2.1      2022-08-08      HyperI core current version
-{% set transport = hyperi_audit_transport | default('tcp') %}
-{% set mode = hyperi_audit_tls_mode | default('anon') %}
-{% set ca = hyperi_audit_tls_ca_file | default('') %}
-{% set cert = hyperi_audit_tls_client_cert | default('') %}
-{% set key = hyperi_audit_tls_client_key | default('') %}
-{% set peer = hyperi_audit_tls_permitted_peer | default('') %}
-{% macro fwd(port) %}{% if transport in ['relp', 'relp-tls'] %}action(type="omrelp" target="{{ collector_address }}" port="{{ port }}"{% if transport == 'relp-tls' %} tls="on"{% if mode == 'mutual' %} tls.authMode="{{ 'name' if peer | length > 0 else 'certvalid' }}" tls.caCert="{{ ca }}" tls.myCert="{{ cert }}" tls.myPrivKey="{{ key }}"{% if peer | length > 0 %} tls.permittedPeer="{{ peer }}"{% endif %}{% endif %}{% endif %} action.resumeRetryCount="-1" queue.type="linkedList" queue.size="10000"){% elif transport == 'syslog-tls' %}action(type="omfwd" target="{{ collector_address }}" port="{{ port }}" protocol="tcp" StreamDriver="gtls" StreamDriverMode="1" StreamDriverAuthMode="{{ 'anon' if mode == 'anon' else ('x509/name' if peer | length > 0 else 'x509/certvalid') }}"{% if mode != 'anon' and peer | length > 0 %} StreamDriverPermittedPeers="{{ peer }}"{% endif %} action.resumeRetryCount="100" queue.type="linkedList" queue.size="10000"){% else %}action(type="omfwd" target="{{ collector_address }}" port="{{ port }}" protocol="tcp" action.resumeRetryCount="100" queue.type="linkedList" queue.size="10000"){% endif %}{% endmacro %}
+# {{ ansible_managed }}
+# Forwards audit.log and local syslog to the receiver.
+# Source: edge-integration-linux, roles/hyperi_audit. License: Apache-2.0.
+{% set transport = hyperi_audit_transport %}
+{% set mode = hyperi_audit_tls_mode %}
+{% set auth = 'anon' if mode == 'anon' else 'x509/name' %}
+{#
+  Each stream gets a disk-assisted queue: records spool to rsyslog's work directory while the
+  receiver is unreachable, and survive an rsyslog restart.
+#}
+{% macro queue(name) %}queue.type="LinkedList" queue.size="10000" queue.filename="{{ name }}" queue.maxDiskSpace="1g" queue.saveOnShutdown="on" action.resumeRetryCount="-1"{% endmacro %}
+{% macro fwd(port, name) -%}
+{% if transport in ['relp', 'relp-tls'] -%}
+action(type="omrelp" target="{{ hyperi_audit_receiver_address }}" port="{{ port }}"
+{%- if transport == 'relp-tls' %} tls="on"
+{%- if mode == 'mutual' %} tls.authMode="name" tls.caCert="{{ hyperi_audit_tls_ca_file }}" tls.myCert="{{ hyperi_audit_tls_client_cert }}" tls.myPrivKey="{{ hyperi_audit_tls_client_key }}" tls.permittedPeer="{{ hyperi_audit_tls_peer }}"{% endif %}
+{%- endif %} {{ queue(name) }})
+{%- else -%}
+action(type="omfwd" target="{{ hyperi_audit_receiver_address }}" port="{{ port }}" protocol="tcp"
+{%- if transport == 'syslog-tls' %} StreamDriver="gtls" StreamDriverMode="1" StreamDriverAuthMode="{{ auth }}"
+{%- if mode != 'anon' %} StreamDriverPermittedPeers="{{ hyperi_audit_tls_peer }}"{% endif %}
+{%- endif %} {{ queue(name) }})
+{%- endif %}
+{%- endmacro %}
 {% if transport == 'syslog-tls' %}
-# syslog-over-TLS: the gtls netstream driver and its trust material are set once,
-# globally; each omfwd action below then selects the driver mode and auth mode.
+
 global(
   DefaultNetstreamDriver="gtls"
-{% if ca | length > 0 %}
-  DefaultNetstreamDriverCAFile="{{ ca }}"
+{% if hyperi_audit_tls_ca_file | length > 0 %}
+  DefaultNetstreamDriverCAFile="{{ hyperi_audit_tls_ca_file }}"
 {% endif %}
 {% if mode == 'mutual' %}
-  DefaultNetstreamDriverCertFile="{{ cert }}"
-  DefaultNetstreamDriverKeyFile="{{ key }}"
+  DefaultNetstreamDriverCertFile="{{ hyperi_audit_tls_client_cert }}"
+  DefaultNetstreamDriverKeyFile="{{ hyperi_audit_tls_client_key }}"
 {% endif %}
 )
 {% elif transport in ['relp', 'relp-tls'] %}
+
 module(load="omrelp")
 {% endif %}
 
-#
-# Log all events to the central collector
-#
+*.* {{ fwd(hyperi_audit_port_syslog, 'hyperi_syslog') }}
 
-*.* {{ fwd(hyperi_audit_port_syslog | default('12205')) }}
-
+# The audit stream has its own ruleset, so its lines never reach the *.* action.
 module(load="imfile")
-input(type="imfile" File="/var/log/audit/audit.log" Tag="auditd" ruleset="remote_auditd" PersistStateInterval="200")
-ruleset(name="remote_auditd"){
- {{ fwd(hyperi_audit_port_audit | default('12201')) }}
+input(type="imfile" File="/var/log/audit/audit.log" Tag="auditd" ruleset="hyperi_audit" PersistStateInterval="200")
+ruleset(name="hyperi_audit") {
+  {{ fwd(hyperi_audit_port_audit, 'hyperi_audit') }}
 }
