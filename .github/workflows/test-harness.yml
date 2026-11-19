@@ -2,7 +2,8 @@ name: audit-collector-test-harness
 
 # GitHub-hosted runners by default. GH_RUNNER_MODE=self-hosted (hyperi-ci's
 # variable) selects the self-hosted runner instead. Fork PRs run their own copy
-# of this file, so the runner group's repository access is what keeps them off.
+# of this file, and the runner group admits public repos, so the repo's fork PR
+# approval policy is what keeps them off the self-hosted runners.
 
 on:
   pull_request:

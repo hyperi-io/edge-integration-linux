@@ -9,5 +9,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 uv sync --locked
-uv run --locked ansible-galaxy collection install -r requirements.yml -p ./collections --force
+# --no-cache: ansible-galaxy caches an empty entry before each request, so a
+# retried server error becomes a fatal "Missing expected 'results'".
+uv run --locked ansible-galaxy collection install -r requirements.yml -p ./collections --force --no-cache
 exec uv run --locked pytest "$@"
