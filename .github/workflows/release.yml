@@ -1,0 +1,73 @@
+name: release
+
+# Every push to main arrives through a PR whose checks passed. semantic-release
+# releases fix:/feat: merges, commits CHANGELOG.md back as the org GitHub App
+# (the main ruleset's bypass), and the tarball is attached to the release.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Two releases at once race the same tag push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: App token
+        id: bot
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.bot.outputs.token }}
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install semantic-release
+        run: |
+          npm install -g \
+            semantic-release@25.0.9 \
+            @semantic-release/changelog@7.0.0 \
+            @semantic-release/git@11.0.1 \
+            @semantic-release/github@12.0.10 \
+            conventional-changelog-conventionalcommits@10.4.1
+
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ steps.bot.outputs.token }}
+          GIT_AUTHOR_NAME: hypersec-ci-bot[bot]
+          GIT_AUTHOR_EMAIL: 246025198+hypersec-ci-bot[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: hypersec-ci-bot[bot]
+          GIT_COMMITTER_EMAIL: 246025198+hypersec-ci-bot[bot]@users.noreply.github.com
+        run: npx semantic-release
+
+      # A release leaves its tag on HEAD. No tag means nothing was released.
+      - name: Attach the tarball
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+        run: |
+          tag="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+          if [[ -z "${tag}" ]]; then
+            echo "No release on this push."
+            exit 0
+          fi
+          ./build-tarball.sh
+          gh release upload "${tag}" "edge-integration-linux-${tag}.tar.gz"

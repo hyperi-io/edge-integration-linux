@@ -11,9 +11,9 @@ Open an issue with the distro and release of the host, the `rsyslogd -v` and `au
 1. Branch from `main`.
 2. Run the lint and the harness ([commands](#commands-that-test-a-change)). For a ruleset change, run the kernel tests in a disposable VM too.
 3. Write the commit subject as a Conventional Commit: `fix: ...` for a fix, `feat: ...` for a capability a user could not use before, `docs: ...` for docs.
-4. Open a pull request against `main`. CI runs the lint, kernel and harness jobs on it.
+4. Open a pull request against `main`. CI runs the lint, kernel and harness jobs on it, and `main` accepts the merge once lint, both kernel jobs and the current-distro harness pass.
 
-A change to role behaviour updates the docs in the same pull request, and an entry under `[Unreleased]` in `CHANGELOG.md`.
+A change to role behaviour updates the docs in the same pull request. Do not edit `CHANGELOG.md`: merging a `fix:` or `feat:` to `main` releases it, and semantic-release writes the changelog entry from the commit, tags the release and attaches the tarball.
 
 ## Context
 
