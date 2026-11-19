@@ -41,6 +41,8 @@ jobs:
         with:
           node-version: "24"
 
+      # The preset stays on 9.x: 10.x needs conventional-changelog-writer 9, and
+      # semantic-release 25's notes generator loads writer 8.
       - name: Install semantic-release
         run: |
           npm install -g \
@@ -48,7 +50,7 @@ jobs:
             @semantic-release/changelog@7.0.0 \
             @semantic-release/git@11.0.1 \
             @semantic-release/github@12.0.10 \
-            conventional-changelog-conventionalcommits@10.4.1
+            conventional-changelog-conventionalcommits@9.3.1
 
       - name: Release
         env:
