@@ -235,22 +235,43 @@ def events(key: str) -> int:
     return sum(1 for line in out.splitlines() if line.startswith("type=SYSCALL"))
 
 
-def fires(key: str, script: str) -> bool:
-    """Run a trigger as the login user and report whether the key logged it."""
-    before = events(key)
+def lost() -> int:
+    """Return how many events the kernel has dropped since boot."""
+    out = sudo("auditctl", "-s", check=False).stdout
+    m = re.search(r"^lost (\d+)", out, re.MULTILINE)
+    return int(m.group(1)) if m else 0
+
+
+def settle() -> None:
+    """Wait until auditd has written every event the kernel queued so far.
+
+    The marker joins the same queue, so once it is in the log, so is the rest.
+    """
+    marker = f"hyperi_settle_{time.monotonic_ns()}"
+    sudo("auditctl", "-m", marker, check=False)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        log = sudo("grep", "-q", marker, "/var/log/audit/audit.log", check=False)
+        if log.returncode == 0:
+            return
+        time.sleep(0.2)
+
+
+def fires(key: str, script: str) -> tuple[bool, int]:
+    """Run a trigger as the login user.
+
+    Returns:
+        Whether the key logged it, and how many events the kernel dropped.
+    """
+    before, dropped = events(key), lost()
     # Setting /proc/self/loginuid gives the trigger an auid, as a login would.
     wrapped = (
         f"echo {LOGIN_UID} > /proc/self/loginuid 2>/dev/null; "
         f"exec sudo -u {LOGIN_USER} sh -c {json.dumps(script)}"
     )
     sudo("sh", "-c", wrapped, check=False)
-    # auditd writes asynchronously, so the event can land after the trigger exits.
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        if events(key) > before:
-            return True
-        time.sleep(0.5)
-    return False
+    settle()
+    return events(key) > before, lost() - dropped
 
 
 @pytest.mark.parametrize("level", ["low", "medium", "high"])
@@ -264,11 +285,13 @@ def test_detection(
     if not path.exists():
         render(level, [], path)
     load_unlocked(path)
-    result = fires(key, script)
+    result, dropped = fires(key, script)
     if level in on.split():
         loaded = sudo("auditctl", "-l", check=False).stdout
         mine = [x for x in loaded.splitlines() if key in x]
-        assert result, f"{key} did not fire at {level}. Loaded: {mine}"
+        assert result, (
+            f"{key} did not fire at {level}, {dropped} events lost. Loaded: {mine}"
+        )
     if level in off.split():
         assert not result, f"{key} fired at {level}"
 
