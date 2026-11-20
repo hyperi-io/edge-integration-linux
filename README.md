@@ -1,6 +1,6 @@
 # edge-integration-linux
 
-Ansible role that audits Linux hosts with auditd and forwards audit and syslog to EdgeStream Hub or any syslog receiver.
+Linux endpoint audit for EdgeStream Hub and Syslog destinations.
 
 > **Agents are a last resort.** Nobody running IT infrastructure wants yet another agent on every host. So we collect in this order, and drop to the next only where the one before cannot reach:
 >
