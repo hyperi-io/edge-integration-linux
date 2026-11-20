@@ -5,6 +5,7 @@ low reaches medium and high mechanically. SUPERSEDED names the few lower-level
 rules a heavier level replaces with a broader one.
 """
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -114,3 +115,28 @@ def test_every_rule_is_keyed() -> None:
 def test_files_end_locked() -> None:
     for profile in PROFILES:
         assert rule_lines(committed(profile))[-1] == "-e 2", profile
+
+
+# The "agents are a last resort" banner is the same text in edge-integration-windows,
+# edge-integration-linux and hyperi-agent. Change all three together and update this.
+BANNER_SHA256 = "359a0dde9503b4e9bc8da370e8984d073867d0ea05e2c613ffa5bbcac0a31469"
+
+
+def test_readme_banner_matches_the_other_repos() -> None:
+    lines = (
+        (Path(__file__).parent.parent / "README.md")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    start = next(
+        i
+        for i, line in enumerate(lines)
+        if line.startswith("> **Agents are a last resort.**")
+    )
+    block = []
+    for line in lines[start:]:
+        if not line.startswith(">"):
+            break
+        block.append(line)
+    digest = hashlib.sha256(("\n".join(block) + "\n").encode("utf-8")).hexdigest()
+    assert digest == BANNER_SHA256
