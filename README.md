@@ -5,7 +5,7 @@ Linux endpoint audit for EdgeStream Hub and Syslog destinations.
 > **Agents are a last resort.** Nobody running IT infrastructure wants yet another agent on every host. So we collect in this order, and drop to the next only where the one before cannot reach:
 >
 > 1. Agentless: what the platform already sends, set up centrally. Windows Event Forwarding, syslog.
-> 2. Platform-native, opinionated and automated: the platform's own logging, configured and deployed by us. Sysmon and the Windows audit policy (edge-integration-windows), auditd and rsyslog (edge-integration-linux).
+> 2. Platform-native, opinionated and automated: the platform's own logging, configured and deployed by us. Sysmon and the Windows audit policy (edge-integration-windows), auditd and rsyslog (edge-integration-linux), Endpoint Security and the unified log (edge-integration-macos).
 > 3. An agent, for what neither reaches: hosts outside a domain, log files, and channels WEF cannot carry, such as DNS server analytic logging. Ours is hyperi-agent. Third-party agents a site already runs, such as Elastic Beats, are taken natively too.
 
 [![CI](https://github.com/hyperi-io/edge-integration-linux/actions/workflows/test-harness.yml/badge.svg)](https://github.com/hyperi-io/edge-integration-linux/actions/workflows/test-harness.yml) [![Licence](https://img.shields.io/badge/licence-Apache--2.0-blue?style=flat)](LICENSE)
