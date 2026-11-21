@@ -118,8 +118,9 @@ def test_files_end_locked() -> None:
 
 
 # The "agents are a last resort" banner is the same text in edge-integration-windows,
-# edge-integration-linux and hyperi-agent. Change all three together and update this.
-BANNER_SHA256 = "359a0dde9503b4e9bc8da370e8984d073867d0ea05e2c613ffa5bbcac0a31469"
+# edge-integration-linux, edge-integration-macos and hyperi-agent. Change all four
+# together and update this.
+BANNER_SHA256 = "486b261e72bdfd72d859bdc5f08e7fae5d18666732f9f1bd7708e5c34ac3be41"
 
 
 def test_readme_banner_matches_the_other_repos() -> None:
